@@ -333,14 +333,23 @@ async def handle_call_tool(
             filters = {}
             if "filetype" in arguments:
                 filters["filetype"] = arguments["filetype"]
-            
+
             results = searcher.search(query, top_k=top_k, filters=filters)
-            
+
             if not results:
                 return [types.TextContent(
                     type="text",
-                    text=f"Failed: {result.get('message', 'Unknown error')}",
+                    text="No results found.",
                 )]
+
+            lines = [f"Found {len(results)} results for '{query}':\n\n"]
+            for i, r in enumerate(results, 1):
+                lines.append(
+                    f"{i}. [Score: {r.score:.3f}, Source: {r.source}]\n"
+                    f"    {r.content[:300]}\n\n"
+                )
+
+            return [types.TextContent(type="text", text="".join(lines))]
         
         elif name == "smart_context":
             query = arguments["query"]
