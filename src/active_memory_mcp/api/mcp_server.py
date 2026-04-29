@@ -460,7 +460,22 @@ async def handle_call_tool(
             filters = {}
             if "filetype" in arguments:
                 filters["filetype"] = arguments["filetype"]
-            
+
+            from datetime import datetime
+            valid_from = None
+            valid_to = None
+            if date_from:
+                try:
+                    valid_from = datetime.fromisoformat(date_from)
+                except (ValueError, TypeError):
+                    date_from = None
+            if date_to:
+                try:
+                    datetime.fromisoformat(date_to)
+                    valid_to = date_to
+                except (ValueError, TypeError):
+                    date_to = None
+
             results = searcher.search_by_date(
                 query, date_from=date_from, date_to=date_to,
                 top_k=top_k, filters=filters,
@@ -493,6 +508,12 @@ async def handle_call_tool(
         elif name == "rename_document":
             doc_id = int(arguments["document_id"])
             new_filename = arguments["new_filename"]
+
+            if not new_filename or not new_filename.strip():
+                return [types.TextContent(
+                    type="text",
+                    text="Failed: filename cannot be empty.",
+                )]
             
             result = processor.rename_document(doc_id, new_filename)
             
