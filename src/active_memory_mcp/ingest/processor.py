@@ -240,6 +240,10 @@ class DocumentProcessor:
             doc.title = doc_metadata.get("title", doc.title)
             doc.author = doc_metadata.get("author", doc.author)
             doc.category = doc_metadata.get("category", doc.category)
+            if "importance" in doc_metadata:
+                doc.importance = int(doc_metadata["importance"])
+            if "pinned" in doc_metadata:
+                doc.pinned = bool(doc_metadata["pinned"])
             doc.metadata_ = doc_metadata
 
             if doc_data["filetype"] == "code":
