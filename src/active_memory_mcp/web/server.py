@@ -329,66 +329,272 @@ DASHBOARD_HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ActiveMemory Control Center</title>
+<title>ActiveMemory</title>
 <style>
-:root{--bg:#0b0d10;--panel:#15191f;--panel2:#1c222a;--line:#2a323d;--text:#eef2f6;--muted:#95a0ae;--accent:#20c997;--warn:#ffcf5a;--danger:#ff6b6b;--blue:#71b7ff;--radius:8px}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font-family:Arial,Helvetica,sans-serif;line-height:1.45}
-button,input,select,textarea{font:inherit}button{cursor:pointer}.app{display:grid;grid-template-columns:248px 1fr;min-height:100vh}
-.side{border-right:1px solid var(--line);background:#101419;padding:16px;position:sticky;top:0;height:100vh}.brand{font-weight:700;font-size:18px;margin:4px 0 18px}.status{font-size:12px;color:var(--muted);padding:10px;border:1px solid var(--line);border-radius:var(--radius)}
-.nav{display:grid;gap:8px;margin-bottom:18px}.nav button{background:transparent;color:var(--muted);border:1px solid transparent;border-radius:var(--radius);padding:10px;text-align:left}.nav button.active,.nav button:hover{color:var(--text);background:var(--panel);border-color:var(--line)}
-.main{padding:18px;max-width:1440px;width:100%;margin:0 auto}.top{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:16px}.top h1{font-size:22px;margin:0 0 4px}.top p{margin:0;color:var(--muted)}
-.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius);padding:14px}.metric{font-size:26px;font-weight:700;color:var(--accent)}.label{font-size:12px;color:var(--muted);text-transform:uppercase}
-.tabs{display:none}.view{display:none}.view.active{display:block}.two{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:12px;margin-top:12px}.stack{display:grid;gap:12px}
-.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.field{display:grid;gap:6px;margin-bottom:10px}.field span{font-size:12px;color:var(--muted)}input,select,textarea{width:100%;background:#0f1318;border:1px solid var(--line);border-radius:var(--radius);color:var(--text);padding:10px}textarea{min-height:128px;resize:vertical}
-.btn{border:1px solid var(--line);background:var(--panel2);color:var(--text);border-radius:var(--radius);padding:10px 12px}.btn.primary{background:var(--accent);color:#06110d;border-color:var(--accent);font-weight:700}.btn.danger{background:transparent;color:var(--danger);border-color:rgba(255,107,107,.5)}
-.list{display:grid;gap:8px}.item{border:1px solid var(--line);background:#11161c;border-radius:var(--radius);padding:12px}.item h3{margin:0 0 6px;font-size:15px}.meta{display:flex;gap:6px;flex-wrap:wrap;color:var(--muted);font-size:12px}.pill{border:1px solid var(--line);border-radius:999px;padding:2px 7px}.pin{color:var(--warn)}.preview{color:#cbd3dc;font-size:13px;margin-top:8px;overflow-wrap:anywhere}
-.searchbar{display:grid;grid-template-columns:1fr 150px 110px auto;gap:8px;margin-bottom:12px}.context{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:12px;color:#d8dee6;max-height:420px;overflow:auto}
-.toast{position:fixed;right:16px;bottom:16px;background:var(--panel2);border:1px solid var(--accent);border-radius:var(--radius);padding:10px 12px;display:none;max-width:320px}.toast.show{display:block}
-@media(max-width:900px){.app{grid-template-columns:1fr}.side{position:static;height:auto;border-right:0;border-bottom:1px solid var(--line)}.nav{grid-template-columns:repeat(4,1fr)}.nav button{text-align:center;padding:9px 6px}.two{grid-template-columns:1fr}.grid{grid-template-columns:repeat(2,1fr)}.searchbar{grid-template-columns:1fr 1fr}.top{display:block}}
-@media(max-width:430px){.main{padding:10px}.side{padding:10px}.brand{font-size:16px;margin-bottom:10px}.nav{gap:6px}.nav button{font-size:12px;min-height:40px}.grid{grid-template-columns:1fr 1fr;gap:8px}.card{padding:10px}.metric{font-size:22px}.searchbar{grid-template-columns:1fr}.row .btn{flex:1 1 120px}.item{padding:10px}.top h1{font-size:19px}textarea{min-height:110px}.toast{left:10px;right:10px;bottom:10px;max-width:none}}
+:root{
+  --bg:#f4f7fb;--surface:#ffffff;--surface-2:#f8fafc;--ink:#101828;--muted:#667085;
+  --line:#d9e2ec;--line-strong:#b8c4d2;--brand:#0f766e;--brand-2:#2563eb;
+  --accent:#b7791f;--danger:#b42318;--ok:#067647;--shadow:0 18px 44px rgba(16,24,40,.10);
+  --radius:8px;--sidebar:#0d1726;--sidebar-2:#162235;--sidebar-text:#e8eef7;
+}
+*{box-sizing:border-box}html{min-width:320px}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;line-height:1.45;letter-spacing:0}
+button,input,select,textarea{font:inherit;letter-spacing:0}button{cursor:pointer}h1,h2,h3,p{margin:0}.app{display:grid;grid-template-columns:272px minmax(0,1fr);min-height:100vh}
+.sidebar{background:var(--sidebar);color:var(--sidebar-text);padding:18px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:18px}
+.brand{display:flex;gap:10px;align-items:center}.mark{width:34px;height:34px;border-radius:8px;background:var(--brand);display:grid;place-items:center;font-weight:800;color:white}.brand-title{font-weight:800;font-size:18px}.brand-sub{color:#a9b6c8;font-size:12px}
+.status{border:1px solid rgba(255,255,255,.12);background:var(--sidebar-2);border-radius:var(--radius);padding:12px;display:grid;gap:8px}.status-line{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:#b9c6d7}.status strong{color:white;font-size:13px}.dot{width:8px;height:8px;border-radius:50%;background:#28c76f;display:inline-block;margin-right:6px}
+.nav{display:grid;gap:6px}.nav button{border:1px solid transparent;background:transparent;color:#bdc8d8;border-radius:var(--radius);padding:11px 12px;text-align:left;display:flex;gap:10px;align-items:center}.nav button:hover,.nav button.active{background:#1c2a40;border-color:#30435f;color:white}.nav .ico{width:18px;text-align:center;color:#8bc4ff}
+.side-foot{margin-top:auto;font-size:12px;color:#9dadc2;border-top:1px solid rgba(255,255,255,.10);padding-top:14px}
+.main{padding:24px;max-width:1520px;width:100%;margin:0 auto}.command{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;margin-bottom:16px}
+.eyebrow{color:var(--brand);font-size:12px;text-transform:uppercase;font-weight:800;margin-bottom:6px}.command h1{font-size:28px;line-height:1.12}.command p{color:var(--muted);max-width:760px;margin-top:8px}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+.btn{border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);border-radius:var(--radius);padding:10px 12px;font-weight:700;min-height:40px;display:inline-flex;gap:8px;align-items:center;justify-content:center}.btn:hover{border-color:var(--brand);color:var(--brand)}.btn.primary{background:var(--brand);border-color:var(--brand);color:white}.btn.blue{background:var(--brand-2);border-color:var(--brand-2);color:white}.btn.danger{color:var(--danger);border-color:#f2b8b5;background:#fff7f7}.btn.slim{padding:7px 10px;min-height:34px;font-size:13px}
+.view{display:none}.view.active{display:block}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px;min-height:116px}.metric-label{font-size:12px;color:var(--muted);font-weight:800;text-transform:uppercase}.metric-value{font-size:32px;font-weight:850;margin-top:8px;color:var(--ink)}.metric-note{font-size:12px;color:var(--muted);margin-top:4px}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;margin-top:14px}.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px}.panel-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}.panel h2{font-size:17px}.panel p{color:var(--muted);font-size:13px;margin-top:4px}
+.list{display:grid;gap:10px}.memory-row{border:1px solid var(--line);background:var(--surface-2);border-radius:var(--radius);padding:13px;display:grid;gap:10px}.row-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.memory-row h3{font-size:15px;line-height:1.25}.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{border:1px solid var(--line);background:white;color:var(--muted);border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700}.chip.pin{color:#8a5a00;background:#fff7df;border-color:#eed28a}.preview{color:#475467;font-size:13px;overflow-wrap:anywhere}.row-actions{display:flex;gap:8px;flex-wrap:wrap}
+.category-row{display:grid;grid-template-columns:1fr auto;gap:8px;border-bottom:1px solid var(--line);padding:9px 0}.category-row:last-child{border-bottom:0}.category-name{font-weight:700}.category-count{color:var(--brand);font-weight:800}
+.searchbar{display:grid;grid-template-columns:minmax(0,1fr) 170px 140px auto;gap:10px;margin-bottom:14px}.field{display:grid;gap:6px;margin-bottom:12px}.field span{font-size:12px;color:var(--muted);font-weight:800}input,select,textarea{width:100%;border:1px solid var(--line-strong);border-radius:var(--radius);background:white;color:var(--ink);padding:10px 11px;min-height:40px}textarea{min-height:160px;resize:vertical}input:focus,select:focus,textarea:focus{outline:2px solid rgba(15,118,110,.18);border-color:var(--brand)}
+.forms{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px}.split{display:grid;grid-template-columns:1fr 150px;gap:10px}.check{display:flex;gap:8px;align-items:center;color:#344054;font-weight:700;margin-bottom:12px}.check input{width:16px;min-height:16px}.context-box{background:#0e1624;color:#e8eef7;border-radius:var(--radius);padding:16px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;min-height:360px;max-height:520px;overflow:auto}
+.empty{border:1px dashed var(--line-strong);border-radius:var(--radius);padding:22px;text-align:center;color:var(--muted);background:var(--surface-2)}.toast{position:fixed;right:18px;bottom:18px;background:#101828;color:white;border-radius:var(--radius);box-shadow:var(--shadow);padding:12px 14px;display:none;max-width:360px;z-index:20}.toast.show{display:block}.toast.error{background:#7a271a}
+@media(max-width:1020px){.app{grid-template-columns:1fr}.sidebar{position:static;height:auto;display:grid;grid-template-columns:1fr;gap:12px}.nav{grid-template-columns:repeat(4,1fr)}.nav button{justify-content:center;text-align:center}.side-foot{display:none}.command{grid-template-columns:1fr}.actions{justify-content:flex-start}.layout,.forms{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.searchbar{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.main{padding:10px}.sidebar{padding:10px}.brand-title{font-size:16px}.brand-sub{display:none}.nav{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.nav button{font-size:11px;padding:8px 4px;min-height:44px;display:grid;gap:3px}.nav .ico{width:auto}.command{padding:14px;margin-bottom:10px}.command h1{font-size:22px}.command p{font-size:13px}.actions .btn{flex:1 1 130px}.metrics{gap:8px}.metric-card{padding:10px;min-height:96px}.metric-value{font-size:24px}.layout{gap:10px;margin-top:10px}.panel{padding:12px}.panel-head{display:grid}.searchbar{grid-template-columns:1fr}.split{grid-template-columns:1fr}.row-top{display:grid}.row-actions .btn{flex:1 1 100px}.toast{left:10px;right:10px;bottom:10px;max-width:none}}
 </style>
 </head>
 <body>
 <div class="app">
-<aside class="side">
-  <div class="brand">ActiveMemory</div>
-  <div class="nav">
-    <button class="active" data-view="overview">Обзор</button>
-    <button data-view="search">Поиск</button>
-    <button data-view="ingest">Запись</button>
-    <button data-view="context">Контекст</button>
-  </div>
-  <div class="status" id="health">Подключение...</div>
-</aside>
-<main class="main">
-  <div class="top"><div><h1>Центр памяти агента</h1><p>Управление знаниями, критичным контекстом и резервной памятью.</p></div><button class="btn" onclick="refreshAll()">Обновить</button></div>
-  <section id="overview" class="view active">
-    <div class="grid" id="stats"></div>
-    <div class="two"><div class="card"><div class="row" style="justify-content:space-between"><h2>Критичная память</h2><button class="btn" onclick="loadDocs(true)">Только критичное</button></div><div class="list" id="docs"></div></div><div class="card"><h2>Категории</h2><div id="categories" class="list"></div></div></div>
-  </section>
-  <section id="search" class="view">
-    <div class="card"><div class="searchbar"><input id="q" placeholder="Запрос к памяти"><select id="cat"><option value="">Все категории</option><option>agent</option><option>project</option><option>knowledge</option><option>decision</option></select><select id="type"><option value="">Все типы</option><option value="text">text</option><option value="pdf">pdf</option><option value="code">code</option><option value="markdown">markdown</option></select><button class="btn primary" onclick="doSearch()">Искать</button></div><div class="list" id="results"></div></div>
-  </section>
-  <section id="ingest" class="view">
-    <div class="two"><form class="card" onsubmit="storeMemory(event)"><h2>Добавить важную память</h2><label class="field"><span>Заголовок</span><input id="title" value="Agent memory"></label><label class="field"><span>Содержимое</span><textarea id="content" required></textarea></label><div class="row"><label class="field" style="flex:1"><span>Категория</span><select id="newCat"><option>agent</option><option>project</option><option>decision</option><option>knowledge</option></select></label><label class="field" style="width:120px"><span>Важность</span><select id="importance"><option value="1">1 critical</option><option value="2" selected>2 high</option><option value="3">3 normal</option><option value="4">4 low</option><option value="5">5 archive</option></select></label></div><label class="field"><span>Теги</span><input id="tags" placeholder="mcp, agent, rule"></label><label class="row"><input id="pinned" type="checkbox" style="width:auto"> Закрепить в рабочем контексте</label><button class="btn primary" type="submit">Сохранить</button></form><form class="card" onsubmit="uploadDoc(event)"><h2>Загрузить документ</h2><label class="field"><span>Файл</span><input id="file" type="file" required></label><label class="field"><span>Категория</span><select id="upCat"><option>knowledge</option><option>project</option><option>agent</option></select></label><button class="btn primary" type="submit">Загрузить и индексировать</button></form></div>
-  </section>
-  <section id="context" class="view"><div class="card"><div class="row" style="justify-content:space-between"><h2>Рабочий контекст агента</h2><button class="btn" onclick="loadContext()">Собрать</button></div><div class="context" id="ctx"></div></div></section>
-</main></div><div class="toast" id="toast"></div>
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="mark">AM</div>
+      <div><div class="brand-title">ActiveMemory</div><div class="brand-sub">Agent memory OS</div></div>
+    </div>
+    <div class="status">
+      <strong><span class="dot"></span><span id="statusText">Инициализация</span></strong>
+      <div class="status-line"><span>Хранилище</span><span id="backendText">-</span></div>
+      <div class="status-line"><span>Контекст</span><span id="criticalText">-</span></div>
+    </div>
+    <nav class="nav">
+      <button class="active" data-view="overview"><span class="ico">01</span><span>Обзор</span></button>
+      <button data-view="search"><span class="ico">02</span><span>Поиск</span></button>
+      <button data-view="ingest"><span class="ico">03</span><span>Запись</span></button>
+      <button data-view="context"><span class="ico">04</span><span>Контекст</span></button>
+    </nav>
+    <div class="side-foot">Локальный центр знаний для агента. Критичная память закрепляется в рабочем контексте.</div>
+  </aside>
+  <main class="main">
+    <section class="command">
+      <div>
+        <div class="eyebrow">Memory Control Center</div>
+        <h1>Оперативная память агента</h1>
+        <p>Управляйте знаниями, приоритетами и контекстом из одного интерфейса. PostgreSQL остаётся основным хранилищем, SQLite хранит резерв критичных данных.</p>
+      </div>
+      <div class="actions">
+        <button class="btn primary" onclick="quickFocus()">Найти память</button>
+        <button class="btn blue" onclick="switchView('ingest')">Добавить</button>
+        <button class="btn" onclick="refreshAll()">Обновить</button>
+      </div>
+    </section>
+
+    <section id="overview" class="view active">
+      <div class="metrics" id="stats"></div>
+      <div class="layout">
+        <div class="panel">
+          <div class="panel-head">
+            <div><h2>Приоритетная память</h2><p>Закреплённые записи и всё с важностью 1-2.</p></div>
+            <button class="btn slim" onclick="loadDocs(true)">Критичное</button>
+          </div>
+          <div class="list" id="docs"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><h2>Сегменты знаний</h2><p>Распределение памяти по категориям.</p></div></div>
+          <div id="categories"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="search" class="view">
+      <div class="panel">
+        <div class="panel-head"><div><h2>Поиск по памяти</h2><p>Гибридный поиск по embeddings и ключевым словам.</p></div></div>
+        <div class="searchbar">
+          <input id="q" placeholder="Что агент должен вспомнить?">
+          <select id="cat"><option value="">Все категории</option><option>agent</option><option>project</option><option>knowledge</option><option>decision</option></select>
+          <select id="type"><option value="">Все типы</option><option value="text">text</option><option value="pdf">pdf</option><option value="code">code</option><option value="markdown">markdown</option></select>
+          <button class="btn primary" onclick="doSearch()">Искать</button>
+        </div>
+        <div class="list" id="results"></div>
+      </div>
+    </section>
+
+    <section id="ingest" class="view">
+      <div class="forms">
+        <form class="panel" onsubmit="storeMemory(event)">
+          <div class="panel-head"><div><h2>Новая память</h2><p>Сохраняйте правила, решения и важный контекст вручную.</p></div></div>
+          <label class="field"><span>Заголовок</span><input id="title" value="Agent memory"></label>
+          <label class="field"><span>Содержимое</span><textarea id="content" required placeholder="Факт, правило, решение или контекст для будущих запусков агента"></textarea></label>
+          <div class="split">
+            <label class="field"><span>Категория</span><select id="newCat"><option>agent</option><option>project</option><option>decision</option><option>knowledge</option></select></label>
+            <label class="field"><span>Важность</span><select id="importance"><option value="1">1 critical</option><option value="2" selected>2 high</option><option value="3">3 normal</option><option value="4">4 low</option><option value="5">5 archive</option></select></label>
+          </div>
+          <label class="field"><span>Теги</span><input id="tags" placeholder="mcp, agent, rule"></label>
+          <label class="check"><input id="pinned" type="checkbox"> Закрепить в рабочем контексте</label>
+          <button class="btn primary" type="submit">Сохранить память</button>
+        </form>
+        <form class="panel" onsubmit="uploadDoc(event)">
+          <div class="panel-head"><div><h2>Индексировать документ</h2><p>PDF, markdown, текст и код попадут в общий контур поиска.</p></div></div>
+          <label class="field"><span>Файл</span><input id="file" type="file" required></label>
+          <label class="field"><span>Категория</span><select id="upCat"><option>knowledge</option><option>project</option><option>agent</option></select></label>
+          <button class="btn blue" type="submit">Загрузить и обработать</button>
+        </form>
+      </div>
+    </section>
+
+    <section id="context" class="view">
+      <div class="panel">
+        <div class="panel-head">
+          <div><h2>Рабочий контекст</h2><p>Готовая выжимка критичной памяти для передачи агенту.</p></div>
+          <button class="btn" onclick="loadContext()">Собрать заново</button>
+        </div>
+        <div class="context-box" id="ctx"></div>
+      </div>
+    </section>
+  </main>
+</div>
+<div class="toast" id="toast"></div>
 <script>
-const $=id=>document.getElementById(id);const api=(u,o)=>fetch(u,o).then(async r=>{if(!r.ok)throw new Error(await r.text());return r.json()});
-function toast(t){const e=$('toast');e.textContent=t;e.classList.add('show');setTimeout(()=>e.classList.remove('show'),3000)}
-document.querySelectorAll('.nav button').forEach(b=>b.onclick=()=>{document.querySelectorAll('.nav button,.view').forEach(x=>x.classList.remove('active'));b.classList.add('active');$(b.dataset.view).classList.add('active')});
-async function loadStats(){const s=await api('/api/stats');$('health').textContent=`${s.backend} | ${s.documents} документов | ${s.critical} критичных`;$('stats').innerHTML=[['Документы',s.documents],['Чанки',s.chunks],['Embeddings',s.embeddings],['Критичное',s.critical]].map(x=>`<div class="card"><div class="label">${x[0]}</div><div class="metric">${x[1]}</div></div>`).join('');$('categories').innerHTML=Object.entries(s.categories).map(([k,v])=>`<div class="item"><b>${k}</b><span class="pill" style="float:right">${v}</span></div>`).join('')||'<p class="preview">Нет данных</p>'}
-function renderDocs(items,target='docs'){ $(target).innerHTML=items.map(d=>`<div class="item"><div class="row" style="justify-content:space-between"><h3>${d.pinned?'<span class="pin">PIN</span> ':''}${d.title}</h3><button class="btn danger" onclick="delDoc(${d.id})">Удалить</button></div><div class="meta"><span class="pill">${d.category}</span><span class="pill">${d.filetype}</span><span class="pill">важность ${d.importance}</span><span class="pill">${d.chunks} чанков</span></div><div class="preview">${d.preview||''}</div><div class="row" style="margin-top:8px"><button class="btn" onclick="patchDoc(${d.id},${!d.pinned},null)">PIN</button><button class="btn" onclick="patchDoc(${d.id},null,1)">Критично</button></div></div>`).join('')||'<p class="preview">Память пуста</p>'}
-async function loadDocs(critical=false){const d=await api('/api/documents?limit=80'+(critical?'&critical=true':''));renderDocs(d.items)}
-async function doSearch(){const q=$('q').value.trim();if(!q)return toast('Введите запрос');const u=`/api/search?q=${encodeURIComponent(q)}&category=${$('cat').value}&filetype=${$('type').value}`;const d=await api(u);$('results').innerHTML=d.results.map(r=>`<div class="item"><div class="meta"><span class="pill">${Math.round(r.score*100)}%</span><span class="pill">${r.source}</span><span class="pill">${r.metadata.category||''}</span></div><div class="preview">${r.content}</div></div>`).join('')||'<p class="preview">Ничего не найдено</p>'}
-async function storeMemory(e){e.preventDefault();const f=new FormData();['content','tags'].forEach(id=>f.append(id,$(id).value));f.append('title',$('title').value);f.append('category',$('newCat').value);f.append('importance',$('importance').value);f.append('pinned',$('pinned').checked?'true':'false');await api('/api/memory',{method:'POST',body:f});$('content').value='';toast('Память сохранена');refreshAll()}
-async function uploadDoc(e){e.preventDefault();const f=new FormData();f.append('file',$('file').files[0]);f.append('category',$('upCat').value);await api('/api/upload',{method:'POST',body:f});$('file').value='';toast('Документ загружен');refreshAll()}
-async function patchDoc(id,pinned,importance){let u=`/api/documents/${id}?`;if(pinned!==null)u+='pinned='+pinned;if(importance!==null)u+='&importance='+importance;await api(u,{method:'PATCH'});refreshAll()}
-async function delDoc(id){if(!confirm('Удалить запись памяти?'))return;await api('/api/documents/'+id,{method:'DELETE'});refreshAll()}
-async function loadContext(){const d=await api('/api/context');$('ctx').textContent=d.items.map(x=>`[${x.category} | importance ${x.importance}${x.pinned?' | pinned':''}] ${x.title}\n${x.content}`).join('\n\n')||'Критичный контекст пока пуст'}
-async function refreshAll(){await loadStats();await loadDocs();await loadContext()}
-$('q').addEventListener('keydown',e=>{if(e.key==='Enter')doSearch()});refreshAll().catch(e=>toast(e.message));
+const $ = id => document.getElementById(id);
+const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({
+  '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+}[c]));
+async function api(endpoint, opts) {
+  const res = await fetch(endpoint, opts);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+function toast(message, type='ok') {
+  const el = $('toast');
+  el.textContent = message;
+  el.className = 'toast show' + (type === 'error' ? ' error' : '');
+  setTimeout(() => el.classList.remove('show'), 3200);
+}
+function switchView(name) {
+  document.querySelectorAll('.nav button,.view').forEach(el => el.classList.remove('active'));
+  document.querySelector(`[data-view="${name}"]`)?.classList.add('active');
+  $(name).classList.add('active');
+}
+function quickFocus() {
+  switchView('search');
+  setTimeout(() => $('q').focus(), 40);
+}
+document.querySelectorAll('.nav button').forEach(btn => {
+  btn.addEventListener('click', () => switchView(btn.dataset.view));
+});
+function metric(label, value, note) {
+  return `<div class="metric-card"><div class="metric-label">${esc(label)}</div><div class="metric-value">${esc(value)}</div><div class="metric-note">${esc(note)}</div></div>`;
+}
+async function loadStats() {
+  const s = await api('/api/stats');
+  $('statusText').textContent = 'Подключено';
+  $('backendText').textContent = s.backend;
+  $('criticalText').textContent = `${s.critical} записей`;
+  $('stats').innerHTML = [
+    metric('Документы', s.documents, 'в долговременной памяти'),
+    metric('Чанки', s.chunks, 'индексированные фрагменты'),
+    metric('Embeddings', s.embeddings, 'готово к поиску'),
+    metric('Критичное', s.critical, `${s.pinned} закреплено`)
+  ].join('');
+  const cats = Object.entries(s.categories || {});
+  $('categories').innerHTML = cats.length ? cats.map(([name, count]) =>
+    `<div class="category-row"><span class="category-name">${esc(name)}</span><span class="category-count">${esc(count)}</span></div>`
+  ).join('') : '<div class="empty">Категории появятся после добавления памяти</div>';
+}
+function renderDocs(items, target='docs') {
+  $(target).innerHTML = items.length ? items.map(d => `
+    <article class="memory-row">
+      <div class="row-top">
+        <h3>${d.pinned ? '<span class="chip pin">PIN</span> ' : ''}${esc(d.title)}</h3>
+        <button class="btn danger slim" onclick="delDoc(${d.id})">Удалить</button>
+      </div>
+      <div class="chips">
+        <span class="chip">${esc(d.category)}</span>
+        <span class="chip">${esc(d.filetype)}</span>
+        <span class="chip">важность ${esc(d.importance)}</span>
+        <span class="chip">${esc(d.chunks)} чанков</span>
+      </div>
+      <div class="preview">${esc(d.preview || 'Предпросмотр пока пуст')}</div>
+      <div class="row-actions">
+        <button class="btn slim" onclick="patchDoc(${d.id},${!d.pinned},null)">${d.pinned ? 'Открепить' : 'Закрепить'}</button>
+        <button class="btn slim" onclick="patchDoc(${d.id},null,1)">Сделать critical</button>
+      </div>
+    </article>`).join('') : '<div class="empty">Память пуста. Добавьте первую запись или загрузите документ.</div>';
+}
+async function loadDocs(critical=false) {
+  const d = await api('/api/documents?limit=80' + (critical ? '&critical=true' : ''));
+  renderDocs(d.items || []);
+}
+async function doSearch() {
+  const q = $('q').value.trim();
+  if (!q) return toast('Введите поисковый запрос', 'error');
+  $('results').innerHTML = '<div class="empty">Идёт поиск по памяти...</div>';
+  try {
+    const url = `/api/search?q=${encodeURIComponent(q)}&category=${encodeURIComponent($('cat').value)}&filetype=${encodeURIComponent($('type').value)}`;
+    const d = await api(url);
+    $('results').innerHTML = (d.results || []).length ? d.results.map(r => `
+      <article class="memory-row">
+        <div class="chips"><span class="chip">${Math.round(r.score * 100)}%</span><span class="chip">${esc(r.source)}</span><span class="chip">${esc(r.metadata.category || 'general')}</span></div>
+        <div class="preview">${esc(r.content)}</div>
+      </article>`).join('') : '<div class="empty">Ничего не найдено. Попробуйте другой запрос или категорию.</div>';
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+async function storeMemory(e) {
+  e.preventDefault();
+  const form = new FormData();
+  ['content','tags'].forEach(id => form.append(id, $(id).value));
+  form.append('title', $('title').value);
+  form.append('category', $('newCat').value);
+  form.append('importance', $('importance').value);
+  form.append('pinned', $('pinned').checked ? 'true' : 'false');
+  await api('/api/memory', {method:'POST', body:form});
+  $('content').value = '';
+  toast('Память сохранена');
+  refreshAll();
+}
+async function uploadDoc(e) {
+  e.preventDefault();
+  const file = $('file').files[0];
+  if (!file) return toast('Выберите файл', 'error');
+  const form = new FormData();
+  form.append('file', file);
+  form.append('category', $('upCat').value);
+  await api('/api/upload', {method:'POST', body:form});
+  $('file').value = '';
+  toast('Документ загружен');
+  refreshAll();
+}
+async function patchDoc(id, pinned, importance) {
+  let url = `/api/documents/${id}?`;
+  if (pinned !== null) url += `pinned=${pinned}`;
+  if (importance !== null) url += `${pinned !== null ? '&' : ''}importance=${importance}`;
+  await api(url, {method:'PATCH'});
+  refreshAll();
+}
+async function delDoc(id) {
+  if (!confirm('Удалить запись памяти?')) return;
+  await api('/api/documents/' + id, {method:'DELETE'});
+  refreshAll();
+}
+async function loadContext() {
+  const d = await api('/api/context');
+  const items = d.items || [];
+  $('ctx').textContent = items.length ? items.map(x =>
+    `[${x.category} | importance ${x.importance}${x.pinned ? ' | pinned' : ''}] ${x.title}\n${x.content}`
+  ).join('\n\n') : 'Критичный контекст пока пуст';
+}
+async function refreshAll() {
+  await loadStats();
+  await loadDocs();
+  await loadContext();
+}
+$('q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+refreshAll().catch(err => toast(err.message, 'error'));
 </script>
 </body></html>"""
 
