@@ -118,11 +118,20 @@ class HybridSearcher:
                 return search_results
             else:
                 # SQLite fallback: load embeddings and compute cosine similarity in Python
+                import numpy as np
                 results = base_query.limit(max(limit * 10, 100)).all()
                 search_results = []
                 for chunk, document, embedding in results:
                     vec = embedding.embedding
-                    if not vec:
+                    if vec is None:
+                        continue
+                    if isinstance(vec, np.ndarray):
+                        if vec.size == 0:
+                            continue
+                    elif isinstance(vec, list):
+                        if len(vec) == 0:
+                            continue
+                    else:
                         continue
                     score = self.embedder.cosine_similarity(query_embedding, vec)
                     search_results.append(

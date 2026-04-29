@@ -367,8 +367,9 @@ class DocumentProcessor:
             old_name = doc.filename
             doc.filename = new_filename
 
-            if doc.metadata_:
-                doc.metadata_["original_filename"] = old_name
+            current_meta = dict(doc.metadata_ or {})
+            current_meta["original_filename"] = old_name
+            doc.metadata_ = current_meta
 
             session.commit()
             return {"success": True, "document_id": doc.id, "old_name": old_name, "new_name": new_filename}
