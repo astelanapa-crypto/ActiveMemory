@@ -250,11 +250,10 @@ class TestStorage:
 
     def test_models_import(self):
         """All models load without errors."""
-        from active_memory_mcp.storage.db import Document, Chunk, Embedding, MemoryCache
+        from active_memory_mcp.storage.db import Document, Chunk, Embedding
         assert Document is not None
         assert Chunk is not None
         assert Embedding is not None
-        assert MemoryCache is not None
 
     def test_document_table_name(self):
         """Document model has correct table name."""
@@ -270,11 +269,6 @@ class TestStorage:
         """Embedding model has correct table name."""
         from active_memory_mcp.storage.db import Embedding
         assert Embedding.__tablename__ == "embeddings"
-
-    def test_memory_cache_table_name(self):
-        """MemoryCache model has correct table name."""
-        from active_memory_mcp.storage.db import MemoryCache
-        assert MemoryCache.__tablename__ == "memory_cache"
 
 
 class TestMCPServer:

@@ -32,16 +32,21 @@ def test_embedder():
     print(f"✓ Embedder OK (dim={len(vec)})")
 
 def test_cosine_similarity():
-    """Test cosine similarity."""
+    """Test cosine similarity with N-gram fallback."""
     embedder = Embedder()
+    embedder._local_model = None  # Force fallback
     vec1 = embedder.embed("hello world")
     vec2 = embedder.embed("hello world")
     vec3 = embedder.embed("completely different")
     sim_same = embedder.cosine_similarity(vec1, vec2)
     sim_diff = embedder.cosine_similarity(vec1, vec3)
-    assert sim_same > 0.9
+    assert sim_same > 0.99
     assert sim_same > sim_diff
-    print(f"✓ Cosine similarity OK (same={sim_same:.3f}, diff={sim_diff:.3f})")
+    # Similar texts should be closer than completely different
+    vec4 = embedder.embed("hello there")
+    sim_similar = embedder.cosine_similarity(vec1, vec4)
+    assert sim_similar > sim_diff
+    print(f"✓ Cosine similarity OK (same={sim_same:.3f}, similar={sim_similar:.3f}, diff={sim_diff:.3f})")
 
 if __name__ == "__main__":
     test_config()

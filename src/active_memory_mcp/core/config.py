@@ -7,7 +7,7 @@ Supports environment variables:
 - AM_USE_LOCAL_EMBEDDING (true/false)
 - AM_CHUNK_SIZE, AM_CHUNK_OVERLAP, AM_MAX_CHUNKS_PER_DOC
 - AM_SEARCH_TOP_K, AM_HYBRID_ALPHA, AM_MIN_SCORE_THRESHOLD
-- AM_REDIS_URL, AM_CACHE_TTL
+- AM_REDIS_URL, AM_CACHE_TTL, AM_USE_REDIS
 - AM_WEB_HOST, AM_WEB_PORT, AM_WEB_DEBUG
 - AM_STORAGE_BACKEND (postgresql/sqlite), AM_ENABLE_SQLITE_FALLBACK (true/false)
 - AM_SQLITE_PATH — path for critical SQLite fallback memory
@@ -66,6 +66,7 @@ class CacheConfig:
     """Cache configuration."""
     redis_url: str = os.getenv("AM_REDIS_URL", "redis://localhost:6379/0")
     ttl_seconds: int = int(os.getenv("AM_CACHE_TTL", "3600"))
+    use_redis: bool = os.getenv("AM_USE_REDIS", "true").lower() == "true"
 
 
 @dataclass

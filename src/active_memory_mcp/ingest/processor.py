@@ -7,7 +7,7 @@ from typing import Any, Dict
 from ..core.config import config
 from .chunker import Chunker
 from ..search.embedder import Embedder
-from ..storage.db import serialize_embedding
+from ..storage.db import Document, Chunk, Embedding
 
 logger = logging.getLogger(__name__)
 
@@ -139,17 +139,17 @@ class DocumentProcessor:
                 total_tokens += chunk.token_count
                 
                 # Generate embedding
-                try:
-                    embedding = self.embedder.embed(chunk.content)
-                    emb = Embedding(
-                        chunk_id=chunk.id,
-                        embedding=serialize_embedding(embedding),
-                        model=self.embedder.model_name,
-                        dimensions=len(embedding) if embedding else config.embedding.dimensions,
-                    )
-                    session.add(emb)
-                except Exception as e:
-                    logger.error(f"Failed to embed chunk {chunk.id}: {e}")
+                embedding = self.embedder.embed(chunk.content)
+                if embedding is None:
+                    logger.warning(f"Failed to embed chunk {chunk.id} (empty content)")
+                    continue
+                emb = Embedding(
+                    chunk_id=chunk.id,
+                    embedding=embedding,
+                    model=self.embedder.model_name,
+                    dimensions=len(embedding),
+                )
+                session.add(emb)
             
             session.commit()
             

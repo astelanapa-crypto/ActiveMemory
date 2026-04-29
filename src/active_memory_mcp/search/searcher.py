@@ -1,11 +1,11 @@
 import logging
 from typing import List, Dict, Any
-from sqlalchemy import or_
 from ..core.config import config
 from .embedder import Embedder
-from ..storage.db import Chunk, Document, Embedding, deserialize_embedding
+from ..storage.db import Chunk, Document, Embedding, get_backend, text
 
 logger = logging.getLogger(__name__)
+
 
 class SearchResult:
     def __init__(self, chunk_id: int, content: str, score: float, source: str, metadata: Dict[str, Any] = None):
@@ -23,6 +23,7 @@ class SearchResult:
             "source": self.source,
             "metadata": self.metadata,
         }
+
 
 class HybridSearcher:
     def __init__(self):
@@ -51,6 +52,7 @@ class HybridSearcher:
                 session.close()
 
     def _vector_search(self, session, query_embedding, limit: int, filters):
+        """Vector search using pgvector cosine distance or brute-force fallback."""
         if not query_embedding:
             return []
         try:
@@ -62,52 +64,95 @@ class HybridSearcher:
             )
             if filters:
                 base_query = self._apply_filters(base_query, filters)
-            search_results = []
-            for chunk, document, embedding in base_query.limit(max(limit * 10, 100)).all():
-                vector = deserialize_embedding(embedding.embedding)
-                if not vector:
-                    continue
-                score = self.embedder.cosine_similarity(query_embedding, vector)
-                search_results.append(
-                    SearchResult(
-                        chunk.id,
-                        chunk.content,
-                        score,
-                        "vector",
-                        self._metadata(document, chunk),
+
+            if get_backend() == "postgresql":
+                # PostgreSQL: use pgvector cosine_distance with HNSW index
+                distance_expr = Embedding.embedding.cosine_distance(query_embedding)
+                results = base_query.order_by(distance_expr).limit(limit).all()
+                search_results = []
+                for chunk, document, embedding in results:
+                    # Recalculate distance for score
+                    dist = session.scalar(
+                        text("SELECT embedding <=> :qve FROM embeddings WHERE chunk_id = :cid"),
+                        {"qve": query_embedding, "cid": embedding.chunk_id}
                     )
-                )
-            search_results.sort(key=lambda r: r.score, reverse=True)
-            return search_results[:limit]
+                    score = 1.0 - (dist if dist is not None else 0.0)
+                    search_results.append(
+                        SearchResult(
+                            chunk.id,
+                            chunk.content,
+                            max(0.0, score),
+                            "vector",
+                            self._metadata(document, chunk),
+                        )
+                    )
+                return search_results
+            else:
+                # SQLite fallback: load embeddings and compute cosine similarity in Python
+                results = base_query.limit(max(limit * 10, 100)).all()
+                search_results = []
+                for chunk, document, embedding in results:
+                    vec = embedding.embedding
+                    if not vec:
+                        continue
+                    score = self.embedder.cosine_similarity(query_embedding, vec)
+                    search_results.append(
+                        SearchResult(
+                            chunk.id, chunk.content, score, "vector",
+                            self._metadata(document, chunk),
+                        )
+                    )
+                search_results.sort(key=lambda r: r.score, reverse=True)
+                return search_results[:limit]
         except Exception as e:
             logger.warning(f"Vector search failed: {e}")
             return []
 
     def _keyword_search(self, session, query: str, limit: int, filters):
+        """Keyword search using PostgreSQL FTS or SQLite ilike fallback."""
         try:
-            tokens = query.lower().split()
+            tokens = [t for t in query.lower().split() if len(t) >= 2]
             if not tokens:
                 return []
-            conditions = []
-            for token in tokens:
-                if len(token) >= 2:
-                    conditions.append(Chunk.content.ilike(f"%{token}%"))
-            if not conditions:
-                return []
-            base_query = session.query(Chunk, Document).join(Document, Chunk.document_id == Document.id)
+
+            base_query = session.query(Chunk, Document).join(
+                Document, Chunk.document_id == Document.id
+            )
             if filters:
                 base_query = self._apply_filters(base_query, filters)
-            results = base_query.filter(or_(*conditions)).limit(limit).all()
-            return [
-                SearchResult(chunk.id, chunk.content, 0.5, "keyword", self._metadata(document, chunk))
-                for chunk, document in results
-            ]
+
+            if get_backend() == "postgresql":
+                # PostgreSQL FTS with ts_rank for relevance scoring
+                tsquery = " & ".join(tokens)
+                results = base_query.filter(
+                    text("chunks.search_vector @@ to_tsquery('russian', :q)")
+                ).params(q=tsquery).add_columns(
+                    text("ts_rank(chunks.search_vector, to_tsquery('russian', :q)) AS rank")
+                ).params(q=tsquery).order_by(
+                    text("rank DESC")
+                ).limit(limit).all()
+
+                return [
+                    SearchResult(
+                        chunk.id, chunk.content, float(rank or 0.0), "keyword",
+                        self._metadata(document, chunk),
+                    )
+                    for chunk, document, rank in results
+                ]
+            else:
+                # SQLite fallback: ilike substring matching
+                from sqlalchemy import or_
+                conditions = [Chunk.content.ilike(f"%{t}%") for t in tokens]
+                results = base_query.filter(or_(*conditions)).limit(limit).all()
+                return [
+                    SearchResult(chunk.id, chunk.content, 0.5, "keyword", self._metadata(document, chunk))
+                    for chunk, document in results
+                ]
         except Exception as e:
             logger.error(f"Keyword search failed: {e}")
             return []
 
     def _apply_filters(self, query, filters):
-        from ..storage.db import Document
         if not filters:
             return query
         if "filetype" in filters:
