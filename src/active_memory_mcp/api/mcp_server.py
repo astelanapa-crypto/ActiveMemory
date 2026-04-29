@@ -12,6 +12,7 @@ from mcp.server import NotificationOptions
 from ..storage.db import get_backend, get_session, Document, Chunk, Embedding
 from ..ingest.processor import DocumentProcessor
 from ..search.searcher import HybridSearcher
+from ..core.config import config
 
 logger = logging.getLogger(__name__)
 

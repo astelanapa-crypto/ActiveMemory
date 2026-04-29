@@ -327,25 +327,23 @@ class HybridSearcher:
             if include_important:
                 doc_filter.append(Document.importance <= importance_threshold)
 
-            if not doc_filter:
-                return []
+            if doc_filter:
+                from sqlalchemy import or_
+                docs = session.query(Document).filter(or_(*doc_filter)).all()
 
-            from sqlalchemy import or_
-            docs = session.query(Document).filter(or_(*doc_filter)).all()
+                for doc in docs:
+                    for chunk in doc.chunks:
+                        sr = SearchResult(
+                            chunk.id,
+                            chunk.content,
+                            1.0 if doc.pinned else 0.8,
+                            "context+pinned" if doc.pinned else "context+important",
+                            self._metadata(doc, chunk),
+                        )
+                        sr.metadata["token_count"] = self._count_tokens(chunk.content)
+                        important_chunks.append(sr)
 
-            for doc in docs:
-                for chunk in doc.chunks:
-                    sr = SearchResult(
-                        chunk.id,
-                        chunk.content,
-                        1.0 if doc.pinned else 0.8,
-                        "context+pinned" if doc.pinned else "context+important",
-                        self._metadata(doc, chunk),
-                    )
-                    sr.metadata["token_count"] = self._count_tokens(chunk.content)
-                    important_chunks.append(sr)
-
-            important_chunks.sort(key=lambda r: r.score, reverse=True)
+                important_chunks.sort(key=lambda r: r.score, reverse=True)
 
             if query:
                 search_results = self.search(query, top_k=50)
