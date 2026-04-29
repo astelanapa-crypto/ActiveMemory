@@ -59,6 +59,9 @@ class SearchConfig:
     top_k: int = int(os.getenv("AM_SEARCH_TOP_K", "5"))
     hybrid_alpha: float = float(os.getenv("AM_HYBRID_ALPHA", "0.5"))  # 0.0=vector only, 1.0=keyword only
     min_score_threshold: float = float(os.getenv("AM_MIN_SCORE_THRESHOLD", "0.1"))
+    context_max_tokens: int = int(os.getenv("AM_CONTEXT_MAX_TOKENS", "4000"))
+    context_boost_importance: float = float(os.getenv("AM_CONTEXT_BOOST_IMPORTANCE", "0.3"))
+    context_boost_pinned: float = float(os.getenv("AM_CONTEXT_BOOST_PINNED", "0.5"))
 
 
 @dataclass

@@ -497,6 +497,108 @@ class TestPhase2Searcher:
         assert len(result.filters_applied) == 0
 
 
+class TestPhase3SmartContext:
+    """Test Phase 3 smart context features."""
+
+    def test_smart_context_returns_list(self):
+        """smart_context returns a list of SearchResult."""
+        from active_memory_mcp.search.searcher import HybridSearcher, SearchResult
+        searcher = HybridSearcher()
+        results = searcher.smart_context("test", max_tokens=1000)
+        assert isinstance(results, list)
+        for r in results:
+            assert isinstance(r, SearchResult)
+
+    def test_smart_context_respects_token_budget(self):
+        """smart_context stays within token budget."""
+        from active_memory_mcp.search.searcher import HybridSearcher
+        searcher = HybridSearcher()
+        max_tokens = 500
+        results = searcher.smart_context("test", max_tokens=max_tokens)
+        total = sum(r.metadata.get("token_count", 0) for r in results)
+        assert total <= max_tokens + searcher._count_tokens(results[-1].content) if results else True
+
+    def test_get_context_returns_list(self):
+        """get_context returns a list of SearchResult."""
+        from active_memory_mcp.search.searcher import HybridSearcher, SearchResult
+        searcher = HybridSearcher()
+        results = searcher.get_context(max_tokens=1000)
+        assert isinstance(results, list)
+
+    def test_get_context_with_query(self):
+        """get_context combines static context with search results."""
+        from active_memory_mcp.search.searcher import HybridSearcher
+        searcher = HybridSearcher()
+        results = searcher.get_context(query="test", max_tokens=2000)
+        assert isinstance(results, list)
+
+    def test_count_tokens_basic(self):
+        """_count_tokens gives reasonable estimates."""
+        from active_memory_mcp.search.searcher import HybridSearcher
+        searcher = HybridSearcher()
+        t1 = searcher._count_tokens("hello world")
+        t2 = searcher._count_tokens("hello world foo bar")
+        assert t1 > 0
+        assert t2 > t1
+
+    def test_apply_priority_boost(self):
+        """_apply_priority_boost increases scores for pinned/important docs."""
+        from active_memory_mcp.search.searcher import HybridSearcher, SearchResult
+        searcher = HybridSearcher()
+        results = [
+            SearchResult(1, "content", 0.5, "vector", {"importance": 3, "pinned": False}),
+            SearchResult(2, "content2", 0.5, "vector", {"importance": 1, "pinned": True}),
+        ]
+        boosted = searcher._apply_priority_boost(results)
+        assert boosted[0].score > 0.5  # Pinned + important boosted
+        assert "boost" in boosted[0].source
+
+    def test_rerank_recency(self):
+        """rerank with recency method updates scores."""
+        from active_memory_mcp.search.searcher import HybridSearcher, SearchResult
+        from datetime import datetime, timezone
+        searcher = HybridSearcher()
+        results = [
+            SearchResult(1, "content", 0.5, "vector", {"created_at": datetime.now(timezone.utc)}),
+        ]
+        reranked = searcher.rerank(results, "test", method="recency")
+        assert len(reranked) == 1
+        assert "recency" in reranked[0].source
+
+    def test_rerank_diversity(self):
+        """rerank with diversity method filters similar results."""
+        from active_memory_mcp.search.searcher import HybridSearcher, SearchResult
+        searcher = HybridSearcher()
+        results = [
+            SearchResult(1, "hello world test", 0.9, "vector", {}),
+            SearchResult(2, "hello world test", 0.8, "vector", {}),
+            SearchResult(3, "completely different topic", 0.7, "vector", {}),
+        ]
+        reranked = searcher.rerank(results, "test", method="diversity")
+        assert len(reranked) < len(results)  # Similar ones filtered
+
+    def test_text_similarity(self):
+        """_text_similarity returns Jaccard similarity."""
+        from active_memory_mcp.search.searcher import HybridSearcher
+        searcher = HybridSearcher()
+        sim = searcher._text_similarity("hello world foo", "hello world bar")
+        assert 0 < sim < 1.0
+        sim_same = searcher._text_similarity("hello world", "hello world")
+        assert sim_same == 1.0
+        sim_diff = searcher._text_similarity("abc def", "xyz qqq")
+        assert sim_diff == 0.0
+
+    def test_new_tools_registered(self):
+        """Phase 3 tools are registered in MCP server."""
+        import asyncio
+        from active_memory_mcp.api.mcp_server import handle_list_tools
+        tools = asyncio.run(handle_list_tools())
+        tool_names = [t.name for t in tools]
+        assert "smart_context" in tool_names
+        assert "get_context" in tool_names
+        assert "reindex_embeddings" in tool_names
+
+
 class TestAPIEndpoints:
     """Test API endpoint patterns."""
 

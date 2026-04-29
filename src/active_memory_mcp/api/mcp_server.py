@@ -241,6 +241,80 @@ async def handle_list_tools() -> List[types.Tool]:
                 "required": ["document_id", "new_filename"],
             },
         ),
+        types.Tool(
+            name="smart_context",
+            description="Search with token budget limit. Returns results that fit within max_tokens, prioritizing pinned and high-importance documents.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query",
+                    },
+                    "max_tokens": {
+                        "type": "number",
+                        "minimum": 100,
+                        "maximum": 32000,
+                        "description": "Maximum token budget (default: 4000)",
+                    },
+                    "filetype": {
+                        "type": "string",
+                        "description": "Filter by file type",
+                    },
+                    "prioritize": {
+                        "type": "boolean",
+                        "description": "Boost pinned/high-importance docs (default: true)",
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        types.Tool(
+            name="get_context",
+            description="Auto-collect important context: pinned + high-importance documents, optionally combined with search results.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Optional search query to combine with static context",
+                    },
+                    "max_tokens": {
+                        "type": "number",
+                        "minimum": 100,
+                        "maximum": 32000,
+                        "description": "Maximum token budget (default: 4000)",
+                    },
+                    "include_pinned": {
+                        "type": "boolean",
+                        "description": "Include pinned documents (default: true)",
+                    },
+                    "include_important": {
+                        "type": "boolean",
+                        "description": "Include high-importance documents (default: true)",
+                    },
+                    "importance_threshold": {
+                        "type": "number",
+                        "minimum": 1,
+                        "maximum": 5,
+                        "description": "Max importance value to include (default: 2)",
+                    },
+                },
+            },
+        ),
+        types.Tool(
+            name="reindex_embeddings",
+            description="Recalculate embeddings for all chunks or a specific document. Use after model changes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "number",
+                        "description": "Optional: reindex only this document",
+                    },
+                },
+            },
+        ),
     ]
 
 @app.call_tool()
@@ -264,19 +338,104 @@ async def handle_call_tool(
             if not results:
                 return [types.TextContent(
                     type="text",
-                    text="No results found.",
+                    text=f"Failed: {result.get('message', 'Unknown error')}",
                 )]
-            
-            lines = [f"Found {len(results)} results:\n"]
+        
+        elif name == "smart_context":
+            query = arguments["query"]
+            max_tokens = int(arguments.get("max_tokens", config.search.context_max_tokens))
+            prioritize = arguments.get("prioritize", True)
+            filters = {}
+            if "filetype" in arguments:
+                filters["filetype"] = arguments["filetype"]
+
+            results = searcher.smart_context(
+                query, max_tokens=max_tokens, filters=filters, prioritize=prioritize,
+            )
+
+            if not results:
+                return [types.TextContent(
+                    type="text",
+                    text="No results found within token budget.",
+                )]
+
+            total_tokens = sum(r.metadata.get("token_count", 0) for r in results)
+            lines = [
+                f"Smart context: {len(results)} results, {total_tokens} tokens (budget: {max_tokens}):\n\n"
+            ]
             for i, r in enumerate(results, 1):
+                tokens = r.metadata.get("token_count", 0)
                 lines.append(
-                    f"{i}. [Score: {r.score:.3f}, Source: {r.source}]\n{r.content[:500]}"
+                    f"{i}. [Score: {r.score:.3f}, ~{tokens} tokens, Source: {r.source}]\n"
+                    f"    {r.content[:400]}\n\n"
                 )
-                if len(r.content) > 500:
-                    lines.append("...")
-                lines.append("\n")
-            
+
             return [types.TextContent(type="text", text="".join(lines))]
+
+        elif name == "get_context":
+            max_tokens = int(arguments.get("max_tokens", config.search.context_max_tokens))
+            include_pinned = arguments.get("include_pinned", True)
+            include_important = arguments.get("include_important", True)
+            importance_threshold = int(arguments.get("importance_threshold", 2))
+            query = arguments.get("query")
+
+            results = searcher.get_context(
+                query=query,
+                max_tokens=max_tokens,
+                include_pinned=include_pinned,
+                include_important=include_important,
+                importance_threshold=importance_threshold,
+            )
+
+            if not results:
+                return [types.TextContent(
+                    type="text",
+                    text="No important context found.",
+                )]
+
+            total_tokens = sum(r.metadata.get("token_count", 0) for r in results)
+            sources = {}
+            for r in results:
+                src = r.source
+                sources[src] = sources.get(src, 0) + 1
+            source_summary = ", ".join(f"{v} {k}" for k, v in sources.items())
+
+            lines = [
+                f"Context: {len(results)} chunks, {total_tokens} tokens ({source_summary}):\n\n"
+            ]
+            for i, r in enumerate(results, 1):
+                tokens = r.metadata.get("token_count", 0)
+                importance = r.metadata.get("importance", 3)
+                pinned = "📌" if r.metadata.get("pinned") else ""
+                lines.append(
+                    f"{i}. {pinned}[Imp: {importance}, ~{tokens} tokens] {r.source}\n"
+                    f"    {r.content[:400]}\n\n"
+                )
+
+            return [types.TextContent(type="text", text="".join(lines))]
+
+        elif name == "reindex_embeddings":
+            doc_id = arguments.get("document_id")
+            if doc_id is not None:
+                doc_id = int(doc_id)
+
+            result = processor.reindex_embeddings(document_id=doc_id)
+
+            if result["success"]:
+                scope = result["scope"]
+                failed_text = f", {result['failed']} failed" if result["failed"] else ""
+                return [types.TextContent(
+                    type="text",
+                    text=(
+                        f"Reindexed embeddings for {scope}: "
+                        f"{result['reindexed']}/{result['total']} chunks re-embedded{failed_text}."
+                    ),
+                )]
+            else:
+                return [types.TextContent(
+                    type="text",
+                    text=f"Failed: {result.get('message', 'Unknown error')}",
+                )]
         
         elif name == "store_document":
             file_path = arguments["file_path"]

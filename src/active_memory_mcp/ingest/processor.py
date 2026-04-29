@@ -381,3 +381,75 @@ class DocumentProcessor:
         finally:
             if should_close:
                 session.close()
+
+    def reindex_embeddings(
+        self,
+        document_id: int = None,
+        session=None,
+    ) -> Dict[str, Any]:
+        """Recalculate embeddings for all chunks (or one document).
+
+        Useful after model change or when N-gram fallback improves.
+        """
+        from ..storage.db import get_session, Document, Chunk, Embedding
+        from sqlalchemy import delete
+
+        should_close = False
+        if session is None:
+            session = get_session()
+            should_close = True
+
+        try:
+            chunks_query = session.query(Chunk)
+            if document_id:
+                doc = session.query(Document).filter(Document.id == document_id).first()
+                if not doc:
+                    return {"success": False, "message": "Document not found"}
+                chunks_query = chunks_query.filter(Chunk.document_id == document_id)
+                total_chunks = session.query(Chunk).filter(Chunk.document_id == document_id).count()
+            else:
+                total_chunks = session.query(Chunk).count()
+
+            if total_chunks == 0:
+                return {"success": False, "message": "No chunks to reindex"}
+
+            chunks = chunks_query.all()
+            chunk_ids = [c.id for c in chunks]
+
+            session.execute(delete(Embedding).where(Embedding.chunk_id.in_(chunk_ids)))
+            session.flush()
+
+            reindexed = 0
+            failed = 0
+            for chunk in chunks:
+                embedding = self.embedder.embed(chunk.content)
+                if embedding is None:
+                    failed += 1
+                    logger.warning(f"Failed to re-embed chunk {chunk.id}")
+                    continue
+                emb = Embedding(
+                    chunk_id=chunk.id,
+                    embedding=embedding,
+                    model=self.embedder.model_name,
+                    dimensions=len(embedding),
+                )
+                session.add(emb)
+                reindexed += 1
+
+            session.commit()
+            scope = f"document {document_id}" if document_id else "all documents"
+            return {
+                "success": True,
+                "scope": scope,
+                "total": total_chunks,
+                "reindexed": reindexed,
+                "failed": failed,
+            }
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to reindex embeddings: {e}")
+            return {"success": False, "message": str(e)}
+        finally:
+            if should_close:
+                session.close()

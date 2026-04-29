@@ -246,3 +246,182 @@ class HybridSearcher:
                 combined_dict[result.chunk_id].score = self.hybrid_alpha * result.score + (1 - self.hybrid_alpha) * combined_dict[result.chunk_id].score
                 combined_dict[result.chunk_id].source = "hybrid"
         return list(combined_dict.values())
+
+    def _apply_priority_boost(self, results: List[SearchResult]) -> List[SearchResult]:
+        """Boost scores for pinned and high-importance documents."""
+        boost_importance = config.search.context_boost_importance
+        boost_pinned = config.search.context_boost_pinned
+
+        for r in results:
+            importance = r.metadata.get("importance", 3)
+            pinned = r.metadata.get("pinned", False)
+
+            importance_boost = boost_importance * (4 - importance) / 3.0
+            pinned_boost = boost_pinned if pinned else 0.0
+
+            r.score = min(1.0, r.score + importance_boost + pinned_boost)
+            if pinned:
+                r.source = f"{r.source}+boost"
+
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results
+
+    def _count_tokens(self, text: str) -> int:
+        """Rough token count: ~4 chars per token for English, ~2 for CJK."""
+        cjk_count = sum(1 for c in text if ord(c) > 0x2E80)
+        ascii_count = len(text) - cjk_count
+        return max(1, cjk_count // 2 + ascii_count // 4)
+
+    def smart_context(
+        self,
+        query: str,
+        max_tokens: int = None,
+        filters: Dict[str, Any] = None,
+        prioritize: bool = True,
+    ) -> List[SearchResult]:
+        """Search with token budget limit instead of count.
+
+        Returns results that fit within max_tokens, prioritizing
+        pinned and high-importance documents.
+        """
+        max_tokens = max_tokens or config.search.context_max_tokens
+        results = self.search(query, top_k=50, filters=filters)
+
+        if prioritize:
+            results = self._apply_priority_boost(results)
+
+        budget_results = []
+        used_tokens = 0
+
+        for r in results:
+            chunk_tokens = self._count_tokens(r.content)
+            if used_tokens + chunk_tokens > max_tokens:
+                break
+            used_tokens += chunk_tokens
+            r.metadata["token_count"] = chunk_tokens
+            budget_results.append(r)
+
+        return budget_results
+
+    def get_context(
+        self,
+        query: str = None,
+        max_tokens: int = None,
+        include_pinned: bool = True,
+        include_important: bool = True,
+        importance_threshold: int = 2,
+    ) -> List[SearchResult]:
+        """Auto-collect important context: pinned + high importance docs.
+
+        If query is provided, combines relevant search results with
+        important static context.
+        """
+        max_tokens = max_tokens or config.search.context_max_tokens
+        from ..storage.db import get_session, Document, Chunk
+        session = get_session()
+        try:
+            important_chunks = []
+            doc_filter = []
+            if include_pinned:
+                doc_filter.append(Document.pinned.is_(True))
+            if include_important:
+                doc_filter.append(Document.importance <= importance_threshold)
+
+            if not doc_filter:
+                return []
+
+            from sqlalchemy import or_
+            docs = session.query(Document).filter(or_(*doc_filter)).all()
+
+            for doc in docs:
+                for chunk in doc.chunks:
+                    sr = SearchResult(
+                        chunk.id,
+                        chunk.content,
+                        1.0 if doc.pinned else 0.8,
+                        "context+pinned" if doc.pinned else "context+important",
+                        self._metadata(doc, chunk),
+                    )
+                    sr.metadata["token_count"] = self._count_tokens(chunk.content)
+                    important_chunks.append(sr)
+
+            important_chunks.sort(key=lambda r: r.score, reverse=True)
+
+            if query:
+                search_results = self.search(query, top_k=50)
+                search_results = self._apply_priority_boost(search_results)
+                seen = {r.chunk_id for r in important_chunks}
+                for sr in search_results:
+                    if sr.chunk_id not in seen:
+                        sr.metadata["token_count"] = self._count_tokens(sr.content)
+                        important_chunks.append(sr)
+                        seen.add(sr.chunk_id)
+
+            budget_results = []
+            used_tokens = 0
+            for r in important_chunks:
+                chunk_tokens = r.metadata.get("token_count", self._count_tokens(r.content))
+                if used_tokens + chunk_tokens > max_tokens:
+                    break
+                used_tokens += chunk_tokens
+                budget_results.append(r)
+
+            return budget_results
+        finally:
+            session.close()
+
+    def rerank(
+        self,
+        results: List[SearchResult],
+        query: str,
+        method: str = "recency",
+    ) -> List[SearchResult]:
+        """Re-rank search results using different strategies."""
+        if not results:
+            return []
+
+        if method == "recency":
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            for r in results:
+                created = r.metadata.get("created_at")
+                if created and isinstance(created, datetime):
+                    if created.tzinfo is None:
+                        created = created.replace(tzinfo=timezone.utc)
+                    age_hours = max(0.01, (now - created).total_seconds() / 3600)
+                    recency_score = 1.0 / (1.0 + age_hours / 168.0)
+                    r.score = r.score * 0.7 + recency_score * 0.3
+                    r.source = f"{r.source}+recency"
+
+        elif method == "length":
+            avg_len = sum(len(r.content) for r in results) / len(results)
+            for r in results:
+                length_ratio = min(len(r.content) / max(avg_len, 1), 2.0) / 2.0
+                r.score = r.score * 0.7 + length_ratio * 0.3
+                r.source = f"{r.source}+length"
+
+        elif method == "diversity":
+            diverse = [results[0]]
+            for r in results[1:]:
+                max_sim = max(
+                    self._text_similarity(r.content, d.content)
+                    for d in diverse
+                )
+                if max_sim < 0.7:
+                    r.score *= (1.0 - max_sim * 0.5)
+                    r.source = f"{r.source}+diversity"
+                    diverse.append(r)
+            results = diverse
+
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results
+
+    def _text_similarity(self, text1: str, text2: str) -> float:
+        """Quick text similarity using Jaccard on word sets."""
+        words1 = set(text1.lower().split())
+        words2 = set(text2.lower().split())
+        if not words1 or not words2:
+            return 0.0
+        intersection = words1 & words2
+        union = words1 | words2
+        return len(intersection) / len(union)
