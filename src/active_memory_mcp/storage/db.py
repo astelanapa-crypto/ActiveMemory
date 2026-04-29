@@ -93,7 +93,6 @@ def init_db():
     import os
     if os.getenv("AM_WEB_SQLITE", "false").lower() == "true":
         from pathlib import Path
-        from sqlalchemy import create_engine
         data_dir = Path(__file__).parent.parent.parent / "data"
         data_dir.mkdir(exist_ok=True)
         db_path = data_dir / "active_memory.db"

@@ -4,7 +4,6 @@ import logging
 from typing import Any, Dict, List, Optional
 from contextlib import asynccontextmanager
 
-from mcp.server.fastapi import serve_app
 from mcp.server import Server
 from mcp.server.models import InitializationOptions
 import mcp.types as types
@@ -289,12 +288,18 @@ async def handle_call_tool(
 
 async def main():
     """Run the MCP server via stdio transport."""
-    from mcp.server.stdio import serve
-    await serve(app, InitializationOptions(
-        server_name="active-memory",
-        server_version="1.0.0",
-        onshutdown=lambda: logger.info("MCP server shutting down"),
-    ))
+    import asyncio
+    from mcp.server.stdio import stdio_server
+    
+    async with stdio_server() as streams:
+        await app.run(
+            streams[0],
+            streams[1],
+            app.create_initialization_options(
+                server_name="active-memory",
+                server_version="1.0.0",
+            ),
+        )
 
 if __name__ == "__main__":
     import asyncio
