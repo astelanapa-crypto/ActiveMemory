@@ -1,0 +1,67 @@
+{% extends "base.html" %}
+{% block title %}ActiveMemory - Search{% endblock %}
+{% block content %}
+<div class="max-w-5xl mx-auto">
+    <header class="mb-8">
+        <h1 class="text-3xl font-bold text-white mb-2">Search Knowledge</h1>
+        <p class="text-gray-400">Find information across all your documents using semantic and keyword search</p>
+    </header>
+    
+    <div class="mb-8">
+        <form method="GET" action="/search" class="flex gap-4">
+            <input type="text" name="q" value="{{ query }}" placeholder="What are you looking for?" 
+                   class="search-box flex-1 mono text-lg" autofocus required>
+            <button type="submit" class="btn px-8">
+                <span class="flex items-center gap-2">
+                    <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path></svg>
+                    Search
+                </span>
+            </button>
+        </form>
+    </div>
+    
+    {% if query %}
+    <div class="mb-6">
+        <h2 class="text-lg font-semibold text-white mb-3">Results for: <span class="text-emerald-400">"{{ query }}"</span></h2>
+        
+        {% if results %}
+        <div class="space-y-4">
+            {% for r in results %}
+            <div class="card p-5 card-hover">
+                <div class="flex items-start justify-between gap-4">
+                    <div class="flex-1">
+                        <div class="flex items-center gap-2 mb-2">
+                            {% if r.source == "vector" %}
+                            <span class="text-xs px-2 py-1 rounded bg-cyan-500/20 text-cyan-400">Vector</span>
+                            {% elif r.source == "keyword" %}
+                            <span class="text-xs px-2 py-1 rounded bg-amber-500/20 text-amber-400">Keyword</span>
+                            {% else %}
+                            <span class="text-xs px-2 py-1 rounded bg-violet-500/20 text-violet-400">Hybrid</span>
+                            {% endif %}
+                            <span class="text-sm text-gray-500">Score: {{ "%.3f"|format(r.score) }}</span>
+                        </div>
+                        <p class="text-gray-300 leading-relaxed mono text-sm">{{ r.content }}</p>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+        {% else %}
+        <div class="card p-8 text-center">
+            <svg class="w-16 h-16 mx-auto text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.172 16.172a4 4 0 015.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+            <p class="text-gray-400">No results found. Try a different query or add more documents.</p>
+        </div>
+        {% endif %}
+    {% else %}
+    <div class="card p-12 text-center">
+        <svg class="w-16 h-16 mx-auto text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+        </svg>
+        <p class="text-gray-400">Enter a query above to search your knowledge base</p>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}
+EOFPY && echo "search.html ok"

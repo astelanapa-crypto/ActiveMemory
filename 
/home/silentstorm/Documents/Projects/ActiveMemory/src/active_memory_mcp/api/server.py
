@@ -1,0 +1,108 @@
+
+import os, json, sqlite3
+from pathlib import Path
+from typing import List, Dict, Any
+from datetime import datetime
+
+from fastapi import FastAPI, HTTPException, Request, Query
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+from fastapi.middleware.cors import CORSMiddleware
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent.parent
+DB_PATH = os.getenv("MEMORY_DB_PATH", str(BASE_DIR / "memory.db"))
+
+app = FastAPI(title="ActiveMemory MCP Dashboard")
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
+
+static_dir = BASE_DIR / "web" / "static"
+static_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+
+templates = Jinja2Templates(directory=str(BASE_DIR / "web" / "templates"))
+
+def get_db():
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def init_db():
+    conn = get_db()
+    conn.execute("""CREATE TABLE IF NOT EXISTS memories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        content TEXT NOT NULL,
+        category TEXT DEFAULT 'general',
+        importance INTEGER DEFAULT 3,
+        embedding BLOB,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        type TEXT DEFAULT 'text',
+        tags TEXT
+    )""")
+    conn.commit()
+    conn.close()
+
+@app.get("/", response_class=HTMLResponse)
+async def dashboard(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "db": DB_PATH}
+
+@app.get("/api/stats")
+async def get_stats():
+    conn = get_db()
+    total = conn.execute("SELECT COUNT(*) as c FROM memories").fetchone()[0]
+    db_size = os.path.getsize(DB_PATH) if os.path.exists(DB_PATH) else 0
+    cats = conn.execute("SELECT category, COUNT(*) as cnt FROM memories GROUP BY category").fetchall()
+    conn.close()
+    return {
+        "documents": total, "chunks": total, "size_bytes": db_size,
+        "size_human": format_bytes(db_size), "categories": {r["category"]: r["cnt"] for r in cats}
+    }
+
+def format_bytes(b):
+    for unit in ["B", "KB", "MB", "GB"]:
+        if b < 1024: return f"{b:.1f} {unit}"
+        b /= 1024
+    return f"{b:.1f} TB"
+
+@app.get("/api/memories")
+async def list_memories(limit: int = Query(50, le=500)):
+    conn = get_db()
+    rows = conn.execute("SELECT id, content, category, importance, type, created_at FROM memories ORDER BY id DESC LIMIT ?", (limit,)).fetchall()
+    conn.close()
+    return {"items": [dict(r) for r in rows]}
+
+@app.post("/api/store")
+async def store_memory(data: Dict[str, Any]):
+    content = data.get("content", "")
+    if not content.strip(): raise HTTPException(status_code=400, detail="Content required")
+    conn = get_db()
+    conn.execute("INSERT INTO memories (content, category, importance, type, tags) VALUES (?, ?, ?, ?, ?)",
+        (content, data.get("category", "general"), data.get("importance", 3), data.get("type", "text"), json.dumps(data.get("tags", []))))
+    conn.commit()
+    last_id = conn.execute("SELECT last_insert_rowid()").fetchone()[0]
+    conn.close()
+    return {"status": "ok", "id": last_id}
+
+@app.get("/api/search")
+async def search(q: str = Query(..., min_length=1), k: int = Query(5, ge=1, le=20), category: str = None):
+    conn = get_db()
+    query = "SELECT id, content, category, importance FROM memories WHERE 1=1"
+    params = []
+    if category:
+        query += " AND category = ?"; params.append(category)
+    query += " AND content LIKE ? ORDER BY importance ASC LIMIT ?"
+    params.extend([f"%{q}%", k])
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    results = [{"id": r["id"], "content": (r["content"][:200] + "...") if len(r["content"]) > 200 else r["content"],
+                "category": r["category"], "importance": r["importance"], "similarity": round(1.0/(r["importance"]+0.1),2)} for r in rows]
+    return {"query": q, "results": results, "count": len(results)}
+
+if __name__ == "__main__":
+    init_db()
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8788, log_level="info")

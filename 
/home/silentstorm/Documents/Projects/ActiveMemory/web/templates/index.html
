@@ -1,0 +1,62 @@
+
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ActiveMemory — Хранилище Знаний Hermes</title>
+<style>
+:root{--bg:#0f0f1a;--card:#1a1a2e;--accent:#00e5a0;--muted:#6b7280;--fg:#f9fafb;--border:#2a2a3e;--radius:12px}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:var(--bg);color:var(--fg);min-height:100vh}
+.container{display:grid;gap:1.5rem;padding:1.5rem;max-width:1200px;margin:0 auto}
+.grid-4{grid-template-columns:1fr;}
+@media(min-width:768px){.grid-4{grid-template-columns:repeat(4,1fr)}}
+.card{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:1.25rem}
+.card-header{font-size:.875rem;color:var(--muted);margin-bottom:.5rem}
+.card-value{font-size:2rem;font-weight:700;color:var(--accent)}
+header{display:flex;justify-content:space-between;align-items:center;padding:1rem 1.5rem;background:var(--card);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:100}
+.logo{display:flex;align-items:center;gap:.75rem;font-weight:700;font-size:1.25rem}
+.logo-accent{color:var(--accent)}
+input{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:.75rem 1rem;color:var(--fg);width:100%;font-size:.95rem}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:.5rem;padding:.75rem 1.5rem;background:var(--accent);color:var(--bg);border:none;border-radius:8px;font-weight:600;cursor:pointer}
+table{width:100%;border-collapse:collapse}
+th,td{padding:1rem;text-align:left;border-bottom:1px solid var(--border)}
+th{font-size:.75rem;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
+tr:hover td{background:rgba(255,255,255,.02)}
+</style>
+</head>
+<body>
+<header>
+<div class="logo"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M21 12c0 3.77-4 7-9 7s-9-3.23-9-7c0-3.77 4-7 9-7s9 3.23 9 7z"/></svg>ActiveMemory</div>
+<div style="display:flex;align-items:center;gap:1rem;font-size:.85rem;color:var(--muted)">Connected</div>
+</header>
+<div class="container">
+<div class="grid-4">
+<div class="card"><div class="card-header">Documents</div><div class="card-value" id="docs">-</div></div>
+<div class="card"><div class="card-header">Chunks</div><div class="card-value" id="chunks">-</div></div>
+<div class="card"><div class="card-header">Size</div><div class="card-value" id="size">-</div></div>
+<div class="card"><div class="card-header">Embeddings</div><div class="card-value" id="embs">-</div></div>
+</div>
+<div class="card" style="grid-column:1/-1">
+<div class="card-header">Recent</div>
+<div id="recent" style="margin-top:1rem"></div>
+</div>
+</div>
+<script>
+const API='/api';
+async function j(f){const r=await fetch(API+f);return r.json();}
+async function load(){
+const d=await j('/stats');
+document.getElementById('docs').textContent=d.documents;
+document.getElementById('chunks').textContent=d.chunks;
+document.getElementById('size').textContent=d.size_human||'0B';
+document.getElementById('embs').textContent=d.documents;
+const rec=await j('/memories?limit=5');
+document.getElementById('recent').innerHTML=rec.items?.map(i=>`<div style="padding:.5rem;border-bottom:1px solid var(--border)"><div style="color:var(--accent);font-size:.85rem">${i.category}</div>${i.content.substring(0,60)}...</div>`).join('')||'<p style="color:var(--muted)">— empty —</p>';
+}
+load();
+document.addEventListener('DOMContentLoaded',load);
+</script>
+</body>
+</html>

@@ -1,0 +1,191 @@
+"""Document ingestion and processing."""
+
+import os
+import logging
+import hashlib
+from pathlib import Path
+from typing import List, Dict, Any, Optional
+from datetime import datetime
+
+from ..core.config import config
+from .chunker import Chunker
+from ..search.embedder import Embedder
+
+logger = logging.getLogger(__name__)
+
+class DocumentProcessor:
+    """Process and ingest documents into the memory system."""
+    
+    def __init__(self):
+        self.chunker = Chunker(
+            chunk_size=config.chunking.chunk_size,
+            chunk_overlap=config.chunking.chunk_overlap,
+        )
+        self.embedder = Embedder()
+    
+    def process_file(self, file_path: str, metadata: Dict[str, Any] = None) -> Dict[str, Any]:
+        """Process a file and return extracted data."""
+        file_path = Path(file_path)
+        if not file_path.exists():
+            raise FileNotFoundError(f"File not found: {file_path}")
+        
+        ext = file_path.suffix.lower()
+        metadata = metadata or {}
+        metadata["original_path"] = str(file_path)
+        metadata["filename"] = file_path.name
+        metadata["filesize"] = file_path.stat().st_size
+        
+        # Determine file type
+        if ext in [".txt"]:
+            filetype = "text"
+            text = self._extract_text(file_path)
+        elif ext in [".pdf"]:
+            filetype = "pdf"
+            text = self._extract_pdf(file_path)
+        elif ext in [".md"]:
+            filetype = "markdown"
+            text = self._extract_markdown(file_path)
+        elif ext in [".py", ".js", ".ts", ".java", ".cpp", ".c", ".h", ".go", ".rs"]:
+            filetype = "code"
+            text = self._extract_text(file_path)
+        else:
+            # Try as text
+            try:
+                text = self._extract_text(file_path)
+                filetype = "text"
+            except:
+                raise ValueError(f"Unsupported file type: {ext}")
+        
+        return {
+            "filename": file_path.name,
+            "filetype": filetype,
+            "filesize": metadata["filesize"],
+            "text": text,
+            "metadata": metadata,
+        }
+    
+    def ingest_document(self, file_path: str, session=None) -> Dict[str, Any]:
+        """Ingest a document into the database."""
+        from ..storage.db import get_session, Document, Chunk, Embedding
+        
+        should_close = False
+        if session is None:
+            session = get_session()
+            should_close = True
+        
+        try:
+            # Process file
+            doc_data = self.process_file(file_path)
+            
+            # Create document record
+            doc = Document(
+                filename=doc_data["filename"],
+                filetype=doc_data["filetype"],
+                filesize=doc_data["filesize"],
+                metadata_=doc_data["metadata"],
+            )
+            session.add(doc)
+            session.flush()  # Get doc.id
+            
+            # Chunk text
+            if doc_data["filetype"] == "code":
+                chunks_data = self.chunker.chunk_code(
+                    doc_data["text"],
+                    doc.id,
+                    doc_data["metadata"].get("original_path", ""),
+                )
+            else:
+                chunks_data = self.chunker.chunk_text(
+                    doc_data["text"],
+                    doc.id,
+                    doc_data["metadata"],
+                )
+            
+            if not chunks_data:
+                logger.warning(f"No chunks extracted from {file_path}")
+                if should_close:
+                    session.close()
+                return {"success": False, "message": "No chunks extracted"}
+            
+            # Limit chunks
+            max_chunks = config.chunking.max_chunks_per_doc
+            if len(chunks_data) > max_chunks:
+                logger.warning(f"Truncating {len(chunks_data)} chunks to {max_chunks}")
+                chunks_data = chunks_data[:max_chunks]
+            
+            # Create chunks and embeddings
+            total_tokens = 0
+            for chunk_data in chunks_data:
+                chunk = Chunk(
+                    document_id=doc.id,
+                    content=chunk_data["content"],
+                    token_count=chunk_data["token_count"],
+                    chunk_index=chunk_data["chunk_index"],
+                )
+                session.add(chunk)
+                session.flush()  # Get chunk.id
+                
+                total_tokens += chunk.token_count
+                
+                # Generate embedding
+                try:
+                    embedding = self.embedder.embed(chunk.content)
+                    emb = Embedding(
+                        chunk_id=chunk.id,
+                        embedding=embedding,
+                        model=self.embedder.model_name,
+                        dimensions=len(embedding) if embedding else config.embedding.dimensions,
+                    )
+                    session.add(emb)
+                except Exception as e:
+                    logger.error(f"Failed to embed chunk {chunk.id}: {e}")
+            
+            session.commit()
+            
+            logger.info(
+                f"Ingested document '{doc.filename}' with {len(chunks_data)} chunks "
+                f"({total_tokens} tokens)"
+            )
+            
+            return {
+                "success": True,
+                "document_id": doc.id,
+                "filename": doc.filename,
+                "chunks": len(chunks_data),
+                "tokens": total_tokens,
+            }
+            
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to ingest document {file_path}: {e}")
+            raise
+        finally:
+            if should_close:
+                session.close()
+    
+    def _extract_text(self, file_path: Path) -> str:
+        """Extract text from a text file."""
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                return f.read()
+        except UnicodeDecodeError:
+            with open(file_path, "r", encoding="latin-1") as f:
+                return f.read()
+    
+    def _extract_pdf(self, file_path: Path) -> str:
+        """Extract text from a PDF file."""
+        try:
+            import PyPDF2
+            with open(file_path, "rb") as f:
+                reader = PyPDF2.PdfReader(f)
+                text = "\n".join(page.extract_text() or "" for page in reader.pages)
+            return text
+        except ImportError:
+            raise ImportError("PyPDF2 not installed. Install with: pip install PyPDF2")
+        except Exception as e:
+            logger.warning(f"PDF extraction failed, falling back to text: {e}")
+            return self._extract_text(file_path)
+    
+    def _extract_markdown(self, file_path: Path) -> str:
+        """Extract text from a markdown file."""
+        return self._extract_text(file_path)

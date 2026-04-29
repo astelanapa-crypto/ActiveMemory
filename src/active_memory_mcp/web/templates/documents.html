@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}ActiveMemory - Documents{% endblock %}
+{% block content %}
+<div class="max-w-5xl mx-auto">
+    <header class="mb-8">
+        <div class="flex items-center justify-between">
+            <div>
+                <h1 class="text-3xl font-bold text-white mb-2">Documents</h1>
+                <p class="text-gray-400">Manage all stored documents and their chunks</p>
+            </div>
+            <a href="/ingest" class="btn flex items-center gap-2">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+                Upload New
+            </a>
+        </div>
+    </header>
+    
+    {% if documents %}
+    <div class="card overflow-hidden">
+        <table class="w-full">
+            <thead class="bg-white/5">
+                <tr class="border-b border-gray-700">
+                    <th class="text-left px-6 py-4 text-sm font-semibold text-gray-300">Document</th>
+                    <th class="text-left px-6 py-4 text-sm font-semibold text-gray-300">Type</th>
+                    <th class="text-left px-6 py-4 text-sm font-semibold text-gray-300">Chunks</th>
+                    <th class="text-left px-6 py-4 text-sm font-semibold text-gray-300">Size</th>
+                    <th class="text-left px-6 py-4 text-sm font-semibold text-gray-300">Created</th>
+                    <th class="text-right px-6 py-4 text-sm font-semibold text-gray-300">Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for doc in documents %}
+                <tr class="border-b border-gray-700/50 hover:bg-white/5 transition-colors">
+                    <td class="px-6 py-4">
+                        <div class="font-medium text-white mono text-sm">{{ doc.filename }}</div>
+                    </td>
+                    <td class="px-6 py-4">
+                        <span class="px-2 py-1 text-xs rounded bg-gray-700 text-gray-300">{{ doc.filetype }}</span>
+                    </td>
+                    <td class="px-6 py-4 text-gray-300">{{ doc.chunks|length }}</td>
+                    <td class="px-6 py-4 text-gray-300">{{ "{:,}".format(doc.filesize) }} B</td>
+                    <td class="px-6 py-4 text-gray-400 text-sm mono">{{ doc.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                    <td class="px-6 py-4 text-right">
+                        <button onclick="deleteDoc({{ doc.id }}, '{{ doc.filename }}')" 
+                                class="text-red-400 hover:text-red-300 text-sm font-medium">
+                            Delete
+                        </button>
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="card p-12 text-center">
+        <svg class="w-16 h-16 mx-auto text-gray-600 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+        </svg>
+        <p class="text-gray-400">No documents uploaded yet</p>
+        <a href="/ingest" class="btn mt-4">Upload Your First Document</a>
+    </div>
+    {% endif %}
+</div>
+
+<script>
+function deleteDoc(id, name) {
+    if (!confirm(`Delete "${name}"?`)) return;
+    fetch(`/api/delete/${id}`, { method: 'POST' })
+        .then(r => r.json())
+        .then(d => {
+            if (d.success) location.reload();
+            else alert('Error: ' + d.detail);
+        })
+        .catch(e => alert('Error: ' + e));
+}
+</script>
+{% endblock %}
+EOFPY && echo "documents.html ok"

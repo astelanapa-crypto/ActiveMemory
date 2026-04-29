@@ -1,0 +1,29 @@
+
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse
+from fastapi.templating import Jinja2Templates
+from fastapi.staticfiles import StaticFiles
+from pathlib import Path
+import uvicorn, os
+
+BASE_DIR = Path(__file__).parent
+app = FastAPI(title="ActiveMemory Dashboard")
+
+# Подключаем папку со стилями
+static_path = BASE_DIR / "web" / "static"
+static_path.mkdir(parents=True, exist_ok=True)
+app.mount("/static", StaticFiles(directory=str(static_path)), name="static")
+
+templates = Jinja2Templates(directory=str(BASE_DIR / "web" / "templates"))
+
+@app.get("/", response_class=HTMLResponse)
+async def root(request: Request):
+    return templates.TemplateResponse("index.html", {"request": request})
+
+@app.get("/health")
+async def health():
+    return {"status": "ok", "dashboard": "ActiveMemory v2 Neo-Brutalism"}
+
+if __name__ == "__main__":
+    print("🚀 Starting ActiveMemory Dashboard on http://0.0.0.0:8789")
+    uvicorn.run(app, host="0.0.0.0", port=8789)
