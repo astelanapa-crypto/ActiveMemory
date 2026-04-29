@@ -288,19 +288,14 @@ async def handle_call_tool(
         )]
 
 async def main():
-    """Run the MCP server."""
-    async with serve_app(
-        app,
-        config.host if hasattr(config, "host") else "0.0.0.0",
-        config.port if hasattr(config, "port") else 8788,
-        initialization_options=InitializationOptions(
-            server_name="active-memory",
-            server_version="1.0.0",
-        ),
-    ):
-        await asyncio.get_event_loop().create_future()
+    """Run the MCP server via stdio transport."""
+    from mcp.server.stdio import serve
+    await serve(app, InitializationOptions(
+        server_name="active-memory",
+        server_version="1.0.0",
+        onshutdown=lambda: logger.info("MCP server shutting down"),
+    ))
 
 if __name__ == "__main__":
     import asyncio
     asyncio.run(main())
-EOFPY && echo "✓ mcp_server.py created"
