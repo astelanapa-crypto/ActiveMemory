@@ -1,5 +1,5 @@
 import logging
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any
 from sqlalchemy import or_
 from ..core.config import config
 from .embedder import Embedder
@@ -84,7 +84,6 @@ class HybridSearcher:
             return []
 
     def _keyword_search(self, session, query: str, limit: int, filters):
-        from sqlalchemy import func as sa_func
         try:
             tokens = query.lower().split()
             if not tokens:

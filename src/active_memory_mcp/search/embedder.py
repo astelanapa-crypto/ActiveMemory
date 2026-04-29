@@ -3,7 +3,6 @@
 import logging
 import numpy as np
 from typing import List, Optional
-from pathlib import Path
 
 from ..core.config import config
 

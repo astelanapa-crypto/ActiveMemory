@@ -9,7 +9,6 @@ from mcp.server.models import InitializationOptions
 import mcp.types as types
 from mcp.server import NotificationOptions
 
-from ..core.config import config
 from ..storage.db import get_backend, get_session, Document, Chunk, Embedding
 from ..ingest.processor import DocumentProcessor
 from ..search.searcher import HybridSearcher
@@ -294,7 +293,6 @@ async def handle_call_tool(
 
 async def main():
     """Run the MCP server via stdio transport."""
-    import asyncio
     from mcp.server.stdio import stdio_server
     
     async with stdio_server() as streams:

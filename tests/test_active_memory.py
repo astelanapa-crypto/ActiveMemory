@@ -2,7 +2,6 @@
 
 import pytest
 import sys
-import os
 from pathlib import Path
 
 # Add src to path for imports
@@ -289,7 +288,7 @@ class TestMCPServer:
     def test_tools_listed(self):
         """MCP server has expected tools registered."""
         import asyncio
-        from active_memory_mcp.api.mcp_server import app, handle_list_tools
+        from active_memory_mcp.api.mcp_server import handle_list_tools
 
         tools = asyncio.run(handle_list_tools())
         tool_names = [t.name for t in tools]
@@ -325,7 +324,8 @@ class TestWebServer:
             sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
             # Don't actually start the server, just check imports
             from active_memory_mcp.web.server import app
-        except ImportError as e:
+            assert app is not None
+        except ImportError:
             # If Flask/Starlette not installed, that's OK for unit tests
             pass
 

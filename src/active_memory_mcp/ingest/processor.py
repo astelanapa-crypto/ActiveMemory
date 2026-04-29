@@ -51,8 +51,8 @@ class DocumentProcessor:
             try:
                 text = self._extract_text(file_path)
                 filetype = "text"
-            except:
-                raise ValueError(f"Unsupported file type: {ext}")
+            except Exception as exc:
+                raise ValueError(f"Unsupported file type: {ext}") from exc
         
         return {
             "filename": metadata["filename"],
