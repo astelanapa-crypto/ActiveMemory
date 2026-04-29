@@ -10,7 +10,7 @@ import mcp.types as types
 from mcp.server import NotificationOptions
 
 from ..core.config import config
-from ..storage.db import get_session, Document, Chunk, Embedding
+from ..storage.db import get_backend, get_session, Document, Chunk, Embedding
 from ..ingest.processor import DocumentProcessor
 from ..search.searcher import HybridSearcher
 
@@ -258,16 +258,22 @@ async def handle_call_tool(
                 doc_count = session.query(func.count(Document.id)).scalar()
                 chunk_count = session.query(func.count(Chunk.id)).scalar()
                 emb_count = session.query(func.count(Embedding.chunk_id)).scalar()
-                
+                critical_count = (
+                    session.query(func.count(Document.id))
+                    .filter((Document.pinned.is_(True)) | (Document.importance <= 2))
+                    .scalar()
+                )
                 total_tokens = session.query(func.sum(Chunk.token_count)).scalar() or 0
                 
                 return [types.TextContent(
                     type="text",
                     text=(
                         f"ActiveMemory Statistics:\n"
+                        f"- Backend: {get_backend()}\n"
                         f"- Documents: {doc_count}\n"
                         f"- Chunks: {chunk_count}\n"
                         f"- Embeddings: {emb_count}\n"
+                        f"- Critical memories: {critical_count}\n"
                         f"- Total tokens: {total_tokens:,}\n"
                         f"- Avg chunks per doc: {chunk_count/max(doc_count,1):.1f}\n"
                         f"- Avg tokens per chunk: {total_tokens/max(chunk_count,1):.0f}"
@@ -295,9 +301,13 @@ async def main():
         await app.run(
             streams[0],
             streams[1],
-            app.create_initialization_options(
+            InitializationOptions(
                 server_name="active-memory",
                 server_version="1.0.0",
+                capabilities=app.get_capabilities(
+                    notification_options=NotificationOptions(),
+                    experimental_capabilities={},
+                ),
             ),
         )
 

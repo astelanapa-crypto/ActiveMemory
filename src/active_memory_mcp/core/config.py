@@ -9,7 +9,9 @@ Supports environment variables:
 - AM_SEARCH_TOP_K, AM_HYBRID_ALPHA, AM_MIN_SCORE_THRESHOLD
 - AM_REDIS_URL, AM_CACHE_TTL
 - AM_WEB_HOST, AM_WEB_PORT, AM_WEB_DEBUG
-- AM_WEB_SQLITE (true/false) — use SQLite instead of PostgreSQL for web dashboard
+- AM_STORAGE_BACKEND (postgresql/sqlite), AM_ENABLE_SQLITE_FALLBACK (true/false)
+- AM_SQLITE_PATH — path for critical SQLite fallback memory
+- AM_WEB_SQLITE (true/false) — legacy alias for forcing SQLite storage
 """
 
 from dataclasses import dataclass

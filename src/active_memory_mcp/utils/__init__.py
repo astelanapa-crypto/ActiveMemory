@@ -1,1 +1,1 @@
-EOF && echo "utils init done"
+"""Utility helpers for ActiveMemory."""

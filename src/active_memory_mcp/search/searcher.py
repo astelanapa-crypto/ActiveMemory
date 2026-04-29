@@ -1,9 +1,9 @@
 import logging
 from typing import List, Dict, Any, Optional
-from sqlalchemy import text, or_, and_
+from sqlalchemy import or_
 from ..core.config import config
 from .embedder import Embedder
-from ..storage.db import get_session, Chunk, Document
+from ..storage.db import Chunk, Document, Embedding, deserialize_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +16,13 @@ class SearchResult:
         self.metadata = metadata or {}
 
     def to_dict(self) -> Dict[str, Any]:
-        return {"chunk_id": self.chunk_id, "content": self.content, "score": self.score, "source": self.source, "metadata": self.metadata}
+        return {
+            "chunk_id": self.chunk_id,
+            "content": self.content,
+            "score": self.score,
+            "source": self.source,
+            "metadata": self.metadata,
+        }
 
 class HybridSearcher:
     def __init__(self):
@@ -45,21 +51,34 @@ class HybridSearcher:
                 session.close()
 
     def _vector_search(self, session, query_embedding, limit: int, filters):
-        from ..storage.db import Chunk, Document, Embedding
+        if not query_embedding:
+            return []
         try:
-            result = session.execute(text("SELECT COUNT(*) FROM pg_extension WHERE extname = 'vector'")).scalar()
-            if not result:
-                logger.warning("pgvector not available, skipping vector search")
-                return []
-            base_query = session.query(Chunk.id, Chunk.content, Chunk.metadata_, Embedding.embedding.cosine_distance(query_embedding).label("distance")).join(Embedding, Chunk.id == Embedding.chunk_id).join(Document, Chunk.document_id == Document.id)
+            base_query = (
+                session.query(Chunk, Document, Embedding)
+                .join(Document, Chunk.document_id == Document.id)
+                .join(Embedding, Chunk.id == Embedding.chunk_id)
+                .filter(Embedding.embedding.isnot(None))
+            )
             if filters:
                 base_query = self._apply_filters(base_query, filters)
-            results = base_query.order_by(text("distance ASC")).limit(limit).all()
             search_results = []
-            for chunk_id, content, metadata, distance in results:
-                score = 1.0 - float(distance) if distance is not None else 0.0
-                search_results.append(SearchResult(chunk_id, content, score, "vector", metadata or {}))
-            return search_results
+            for chunk, document, embedding in base_query.limit(max(limit * 10, 100)).all():
+                vector = deserialize_embedding(embedding.embedding)
+                if not vector:
+                    continue
+                score = self.embedder.cosine_similarity(query_embedding, vector)
+                search_results.append(
+                    SearchResult(
+                        chunk.id,
+                        chunk.content,
+                        score,
+                        "vector",
+                        self._metadata(document, chunk),
+                    )
+                )
+            search_results.sort(key=lambda r: r.score, reverse=True)
+            return search_results[:limit]
         except Exception as e:
             logger.warning(f"Vector search failed: {e}")
             return []
@@ -76,11 +95,14 @@ class HybridSearcher:
                     conditions.append(Chunk.content.ilike(f"%{token}%"))
             if not conditions:
                 return []
-            base_query = session.query(Chunk.id, Chunk.content, Chunk.metadata_).join(Document, Chunk.document_id == Document.id)
+            base_query = session.query(Chunk, Document).join(Document, Chunk.document_id == Document.id)
             if filters:
                 base_query = self._apply_filters(base_query, filters)
             results = base_query.filter(or_(*conditions)).limit(limit).all()
-            return [SearchResult(id_, content, 0.5, "keyword", metadata or {}) for id_, content, metadata in results]
+            return [
+                SearchResult(chunk.id, chunk.content, 0.5, "keyword", self._metadata(document, chunk))
+                for chunk, document in results
+            ]
         except Exception as e:
             logger.error(f"Keyword search failed: {e}")
             return []
@@ -93,7 +115,26 @@ class HybridSearcher:
             query = query.filter(Document.filetype == filters["filetype"])
         if "filename" in filters:
             query = query.filter(Document.filename.ilike(f"%{filters['filename']}%"))
+        if "category" in filters:
+            query = query.filter(Document.category == filters["category"])
+        if "pinned" in filters:
+            query = query.filter(Document.pinned == bool(filters["pinned"]))
         return query
+
+    def _metadata(self, document: Document, chunk: Chunk) -> Dict[str, Any]:
+        metadata = dict(document.metadata_ or {})
+        metadata.update(chunk.metadata_ or {})
+        metadata.update(
+            {
+                "document_id": document.id,
+                "filename": document.filename,
+                "filetype": document.filetype,
+                "category": document.category,
+                "importance": document.importance,
+                "pinned": document.pinned,
+            }
+        )
+        return metadata
 
     def _combine_results(self, vector_results, keyword_results, top_k):
         combined_dict = {}

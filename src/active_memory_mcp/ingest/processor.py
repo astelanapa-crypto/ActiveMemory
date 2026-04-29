@@ -1,15 +1,13 @@
 """Document ingestion and processing."""
 
-import os
 import logging
-import hashlib
 from pathlib import Path
-from typing import List, Dict, Any, Optional
-from datetime import datetime
+from typing import Any, Dict
 
 from ..core.config import config
 from .chunker import Chunker
 from ..search.embedder import Embedder
+from ..storage.db import serialize_embedding
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +30,7 @@ class DocumentProcessor:
         ext = file_path.suffix.lower()
         metadata = metadata or {}
         metadata["original_path"] = str(file_path)
-        metadata["filename"] = file_path.name
+        metadata.setdefault("filename", file_path.name)
         metadata["filesize"] = file_path.stat().st_size
         
         # Determine file type
@@ -57,14 +55,19 @@ class DocumentProcessor:
                 raise ValueError(f"Unsupported file type: {ext}")
         
         return {
-            "filename": file_path.name,
+            "filename": metadata["filename"],
             "filetype": filetype,
             "filesize": metadata["filesize"],
             "text": text,
             "metadata": metadata,
         }
     
-    def ingest_document(self, file_path: str, session=None) -> Dict[str, Any]:
+    def ingest_document(
+        self,
+        file_path: str,
+        metadata: Dict[str, Any] = None,
+        session=None,
+    ) -> Dict[str, Any]:
         """Ingest a document into the database."""
         from ..storage.db import get_session, Document, Chunk, Embedding
         
@@ -75,14 +78,21 @@ class DocumentProcessor:
         
         try:
             # Process file
-            doc_data = self.process_file(file_path)
+            doc_data = self.process_file(file_path, metadata=metadata)
+            doc_metadata = doc_data["metadata"]
             
             # Create document record
             doc = Document(
                 filename=doc_data["filename"],
                 filetype=doc_data["filetype"],
                 filesize=doc_data["filesize"],
-                metadata_=doc_data["metadata"],
+                title=doc_metadata.get("title"),
+                author=doc_metadata.get("author"),
+                category=doc_metadata.get("category", "general"),
+                source=doc_metadata.get("source", "document"),
+                importance=int(doc_metadata.get("importance", 3)),
+                pinned=bool(doc_metadata.get("pinned", False)),
+                metadata_=doc_metadata,
             )
             session.add(doc)
             session.flush()  # Get doc.id
@@ -121,6 +131,7 @@ class DocumentProcessor:
                     content=chunk_data["content"],
                     token_count=chunk_data["token_count"],
                     chunk_index=chunk_data["chunk_index"],
+                    metadata_=chunk_data.get("metadata", {}),
                 )
                 session.add(chunk)
                 session.flush()  # Get chunk.id
@@ -132,7 +143,7 @@ class DocumentProcessor:
                     embedding = self.embedder.embed(chunk.content)
                     emb = Embedding(
                         chunk_id=chunk.id,
-                        embedding=embedding,
+                        embedding=serialize_embedding(embedding),
                         model=self.embedder.model_name,
                         dimensions=len(embedding) if embedding else config.embedding.dimensions,
                     )

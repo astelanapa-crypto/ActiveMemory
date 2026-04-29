@@ -44,4 +44,3 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logger.info("Shutting down...")
         sys.exit(0)
-EOFPY && echo "✓ main.py created"

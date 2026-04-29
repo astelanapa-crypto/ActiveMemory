@@ -1,10 +1,13 @@
 """Database models and operations."""
 
-from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, Float, ForeignKey, Index, JSON, LargeBinary
+from pathlib import Path
+import json
+import os
+
+from sqlalchemy import Boolean, Column, create_engine, DateTime, ForeignKey, Index, Integer, JSON
+from sqlalchemy import String, Text
 from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime
-import numpy as np
-from typing import Optional, List
 import logging
 
 from ..core.config import config
@@ -23,6 +26,10 @@ class Document(Base):
     filesize = Column(Integer)
     title = Column(String(200))
     author = Column(String(200))
+    category = Column(String(100), default="general")
+    source = Column(String(200), default="manual")
+    importance = Column(Integer, default=3)
+    pinned = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     metadata_ = Column(JSON, default=dict)
@@ -46,6 +53,7 @@ class Chunk(Base):
     chunk_index = Column(Integer, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
     search_vector = Column(String, nullable=True)  # String for SQLite, VARCHAR for PG
+    metadata_ = Column(JSON, default=dict)
     
     document = relationship("Document", back_populates="chunks")
     embedding = relationship("Embedding", uselist=False, back_populates="chunk", cascade="all, delete-orphan")
@@ -62,7 +70,7 @@ class Embedding(Base):
     __tablename__ = "embeddings"
     
     chunk_id = Column(Integer, ForeignKey("chunks.id", ondelete="CASCADE"), primary_key=True)
-    embedding = Column(LargeBinary, nullable=True)  # BLOB for SQLite, could use VECTOR for PG
+    embedding = Column(Text, nullable=True)
     model = Column(String(200), default="bge-m3")
     dimensions = Column(Integer, default=1024)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -86,36 +94,78 @@ class MemoryCache(Base):
 
 _engine = None
 _SessionLocal = None
+_backend = None
+
+
+def _sqlite_url() -> str:
+    data_dir = Path(__file__).resolve().parents[3] / "data"
+    data_dir.mkdir(exist_ok=True)
+    db_path = Path(os.getenv("AM_SQLITE_PATH", str(data_dir / "active_memory_fallback.db")))
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return f"sqlite:///{db_path}"
+
+
+def _create_sqlite_engine(reason: str):
+    global _backend
+    url = _sqlite_url()
+    logger.warning("Using SQLite fallback for critical agent memory: %s", reason)
+    _backend = "sqlite"
+    return create_engine(url, connect_args={"check_same_thread": False})
+
+
+def serialize_embedding(vector):
+    """Serialize an embedding list for database storage."""
+    if vector is None:
+        return None
+    if isinstance(vector, str):
+        return vector
+    return json.dumps(vector)
+
+
+def deserialize_embedding(value):
+    """Deserialize an embedding from database storage."""
+    if not value:
+        return None
+    if isinstance(value, list):
+        return value
+    if isinstance(value, bytes):
+        value = value.decode("utf-8")
+    return json.loads(value)
 
 def init_db():
     """Initialize database engine and create tables."""
-    global _engine, _SessionLocal
-    import os
-    if os.getenv("AM_WEB_SQLITE", "false").lower() == "true":
-        from pathlib import Path
-        data_dir = Path(__file__).parent.parent.parent / "data"
-        data_dir.mkdir(exist_ok=True)
-        db_path = data_dir / "active_memory.db"
-        logger.info(f"Web dashboard using SQLite: {db_path}")
-        _engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
-        Base.metadata.create_all(_engine)
-        _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
-        logger.info("SQLite database initialized")
-        return
-    # Use PostgreSQL
-    logger.info(f"Connecting to database: {config.database_url}")
-    _engine = create_engine(
-        config.database_url,
-        echo=config.web.debug,
-        pool_size=10,
-        max_overflow=20,
-        pool_pre_ping=True,
-        pool_recycle=3600,
+    global _engine, _SessionLocal, _backend
+    force_sqlite = (
+        os.getenv("AM_STORAGE_BACKEND", "").lower() == "sqlite"
+        or os.getenv("AM_WEB_SQLITE", "false").lower() == "true"
     )
+    allow_fallback = os.getenv("AM_ENABLE_SQLITE_FALLBACK", "true").lower() == "true"
+    if force_sqlite:
+        _engine = _create_sqlite_engine("AM_STORAGE_BACKEND/AM_WEB_SQLITE requested")
+    else:
+        logger.info(f"Connecting to database: {config.database_url}")
+        try:
+            _engine = create_engine(
+                config.database_url,
+                echo=config.web.debug,
+                pool_size=10,
+                max_overflow=20,
+                pool_pre_ping=True,
+                pool_recycle=3600,
+            )
+            with _engine.connect() as conn:
+                conn.exec_driver_sql("SELECT 1")
+            _backend = "postgresql"
+        except Exception as e:
+            if not allow_fallback:
+                raise
+            _engine = _create_sqlite_engine(f"PostgreSQL unavailable: {e}")
+
     Base.metadata.create_all(_engine)
-    if config.db.use_pgvector:
+    if _backend == "postgresql" and config.db.use_pgvector:
         try:
             from sqlalchemy import text
+
             with _engine.connect() as conn:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
                 conn.commit()
@@ -123,7 +173,7 @@ def init_db():
         except Exception as e:
             logger.warning(f"Could not enable pgvector: {e}")
     _SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=_engine)
-    logger.info("Database initialized successfully")
+    logger.info("Database initialized successfully using %s", _backend)
 
 def get_session():
     """Get a database session."""
@@ -138,3 +188,10 @@ def get_engine():
     if _engine is None:
         init_db()
     return _engine
+
+
+def get_backend() -> str:
+    """Return the active storage backend name."""
+    if _engine is None:
+        init_db()
+    return _backend or "unknown"

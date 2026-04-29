@@ -9,7 +9,7 @@ description = "High-performance MCP server for knowledge management with Postgre
 authors = [{name = "SilentStorm", email = "silentstorm@duckdns.org"}]
 readme = "README.md"
 license = {text = "MIT"}
-requires-python = ">=3.11"
+requires-python = ">=3.12"
 dependencies = [
     "mcp[cli,server]>=1.8.0",
     "httpx>=0.25.0",
@@ -39,4 +39,4 @@ packages = ["src/active_memory_mcp"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py311"
+target-version = "py312"
