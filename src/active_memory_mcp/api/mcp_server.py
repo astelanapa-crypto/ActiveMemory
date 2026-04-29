@@ -126,6 +126,121 @@ async def handle_list_tools() -> List[types.Tool]:
             description="Get memory statistics.",
             inputSchema={"type": "object", "properties": {}},
         ),
+        types.Tool(
+            name="update_document",
+            description="Update a document: replace content and re-embed. Old chunks are deleted.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "number",
+                        "description": "ID of the document to update",
+                    },
+                    "file_path": {
+                        "type": "string",
+                        "description": "Path to the new file",
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Optional metadata overrides",
+                    },
+                },
+                "required": ["document_id", "file_path"],
+            },
+        ),
+        types.Tool(
+            name="bulk_search",
+            description="Execute multiple search queries in one call.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "queries": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of search queries",
+                    },
+                    "top_k": {
+                        "type": "number",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Number of results per query (default: 5)",
+                    },
+                    "filetype": {
+                        "type": "string",
+                        "description": "Filter by file type",
+                    },
+                },
+                "required": ["queries"],
+            },
+        ),
+        types.Tool(
+            name="update_document_metadata",
+            description="Update metadata fields on an existing document.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "number",
+                        "description": "ID of the document",
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Fields to update (title, author, category, importance, pinned, etc.)",
+                    },
+                },
+                "required": ["document_id", "metadata"],
+            },
+        ),
+        types.Tool(
+            name="search_by_date",
+            description="Search within a date range.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query",
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "description": "Start date (ISO format: YYYY-MM-DD)",
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "End date (ISO format: YYYY-MM-DD)",
+                    },
+                    "top_k": {
+                        "type": "number",
+                        "minimum": 1,
+                        "maximum": 20,
+                        "description": "Number of results (default: 5)",
+                    },
+                    "filetype": {
+                        "type": "string",
+                        "description": "Filter by file type",
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        types.Tool(
+            name="rename_document",
+            description="Rename a document without changing its content.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "number",
+                        "description": "ID of the document",
+                    },
+                    "new_filename": {
+                        "type": "string",
+                        "description": "New filename",
+                    },
+                },
+                "required": ["document_id", "new_filename"],
+            },
+        ),
     ]
 
 @app.call_tool()
@@ -280,6 +395,117 @@ async def handle_call_tool(
                 )]
             finally:
                 session.close()
+        
+        elif name == "update_document":
+            doc_id = int(arguments["document_id"])
+            file_path = arguments["file_path"]
+            metadata = arguments.get("metadata", {})
+            
+            result = processor.update_document(doc_id, file_path, metadata=metadata)
+            
+            if result["success"]:
+                return [types.TextContent(
+                    type="text",
+                    text=f"Updated document '{result['filename']}': {result['new_chunks']} new chunks, {result['tokens']} tokens.",
+                )]
+            else:
+                return [types.TextContent(
+                    type="text",
+                    text=f"Failed: {result.get('message', 'Unknown error')}",
+                )]
+        
+        elif name == "bulk_search":
+            queries = arguments["queries"]
+            top_k = int(arguments.get("top_k", 5))
+            filters = {}
+            if "filetype" in arguments:
+                filters["filetype"] = arguments["filetype"]
+            
+            results = searcher.bulk_search(queries, top_k=top_k, filters=filters)
+            
+            lines = []
+            for q, res_list in results.items():
+                lines.append(f"Query: '{q}' ({len(res_list)} results):\n")
+                if not res_list:
+                    lines.append("  No results.\n")
+                else:
+                    for i, r in enumerate(res_list, 1):
+                        lines.append(f"  {i}. [Score: {r.score:.3f}] {r.content[:200]}...\n")
+                lines.append("\n")
+            
+            return [types.TextContent(type="text", text="".join(lines))]
+        
+        elif name == "update_document_metadata":
+            doc_id = int(arguments["document_id"])
+            metadata = arguments["metadata"]
+            
+            result = processor.update_document_metadata(doc_id, metadata)
+            
+            if result["success"]:
+                return [types.TextContent(
+                    type="text",
+                    text=f"Updated metadata for document {doc_id}.",
+                )]
+            else:
+                return [types.TextContent(
+                    type="text",
+                    text=f"Failed: {result.get('message', 'Unknown error')}",
+                )]
+        
+        elif name == "search_by_date":
+            query = arguments["query"]
+            top_k = int(arguments.get("top_k", 5))
+            date_from = arguments.get("date_from")
+            date_to = arguments.get("date_to")
+            filters = {}
+            if "filetype" in arguments:
+                filters["filetype"] = arguments["filetype"]
+            
+            results = searcher.search_by_date(
+                query, date_from=date_from, date_to=date_to,
+                top_k=top_k, filters=filters,
+            )
+            
+            if not results:
+                return [types.TextContent(
+                    type="text",
+                    text="No results found for the given date range.",
+                )]
+            
+            date_info = []
+            if date_from:
+                date_info.append(f"from {date_from}")
+            if date_to:
+                date_info.append(f"to {date_to}")
+            date_str = f" ({' '.join(date_info)})" if date_info else ""
+            
+            lines = [f"Found {len(results)} results{date_str}:\n"]
+            for i, r in enumerate(results, 1):
+                lines.append(
+                    f"{i}. [Score: {r.score:.3f}, Source: {r.source}]\n{r.content[:500]}"
+                )
+                if len(r.content) > 500:
+                    lines.append("...")
+                lines.append("\n")
+            
+            return [types.TextContent(type="text", text="".join(lines))]
+        
+        elif name == "rename_document":
+            doc_id = int(arguments["document_id"])
+            new_filename = arguments["new_filename"]
+            
+            result = processor.rename_document(doc_id, new_filename)
+            
+            if result["success"]:
+                return [types.TextContent(
+                    type="text",
+                    text=f"Renamed document {doc_id}: '{result['old_name']}' -> '{result['new_name']}'.",
+                )]
+            else:
+                return [types.TextContent(
+                    type="text",
+                    text=f"Failed: {result.get('message', 'Unknown error')}",
+                )]
         
         else:
             raise ValueError(f"Unknown tool: {name}")

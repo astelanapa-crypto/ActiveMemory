@@ -51,6 +51,35 @@ class HybridSearcher:
             if should_close:
                 session.close()
 
+    def bulk_search(self, queries: List[str], top_k: int = None, filters: Dict[str, Any] = None) -> Dict[str, List[SearchResult]]:
+        """Execute multiple searches in one call, reusing the same session."""
+        from ..storage.db import get_session
+        top_k = top_k or self.top_k
+        session = get_session()
+        try:
+            results = {}
+            for q in queries:
+                results[q] = self.search(q, top_k=top_k, filters=filters, session=session)
+            return results
+        finally:
+            session.close()
+
+    def search_by_date(
+        self,
+        query: str,
+        date_from: str = None,
+        date_to: str = None,
+        top_k: int = None,
+        filters: Dict[str, Any] = None,
+    ) -> List[SearchResult]:
+        """Search with date range filter. Dates in ISO format (YYYY-MM-DD)."""
+        date_filters = dict(filters or {})
+        if date_from:
+            date_filters["date_from"] = date_from
+        if date_to:
+            date_filters["date_to"] = date_to
+        return self.search(query, top_k=top_k, filters=date_filters)
+
     def _vector_search(self, session, query_embedding, limit: int, filters):
         """Vector search using pgvector cosine distance or brute-force fallback."""
         if not query_embedding:
@@ -153,6 +182,7 @@ class HybridSearcher:
             return []
 
     def _apply_filters(self, query, filters):
+        from datetime import datetime
         if not filters:
             return query
         if "filetype" in filters:
@@ -163,6 +193,18 @@ class HybridSearcher:
             query = query.filter(Document.category == filters["category"])
         if "pinned" in filters:
             query = query.filter(Document.pinned == bool(filters["pinned"]))
+        if "date_from" in filters:
+            try:
+                dt = datetime.fromisoformat(filters["date_from"])
+                query = query.filter(Document.created_at >= dt)
+            except (ValueError, TypeError):
+                pass
+        if "date_to" in filters:
+            try:
+                dt = datetime.fromisoformat(filters["date_to"])
+                query = query.filter(Document.created_at <= dt)
+            except (ValueError, TypeError):
+                pass
         return query
 
     def _metadata(self, document: Document, chunk: Chunk) -> Dict[str, Any]:

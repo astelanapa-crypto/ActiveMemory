@@ -200,3 +200,183 @@ class DocumentProcessor:
     def _extract_markdown(self, file_path: Path) -> str:
         """Extract text from a markdown file."""
         return self._extract_text(file_path)
+
+    def update_document(
+        self,
+        document_id: int,
+        file_path: str,
+        metadata: Dict[str, Any] = None,
+        session=None,
+    ) -> Dict[str, Any]:
+        """Replace document content: delete old chunks+embeddings, re-ingest."""
+        from ..storage.db import get_session, get_engine
+        from sqlalchemy import delete
+
+        should_close = False
+        if session is None:
+            session = get_session()
+            should_close = True
+
+        try:
+            doc = session.query(Document).filter(Document.id == document_id).first()
+            if not doc:
+                return {"success": False, "message": "Document not found"}
+
+            engine = get_engine()
+            session.execute(delete(Embedding).where(
+                Embedding.chunk_id.in_(
+                    session.query(Chunk.id).filter(Chunk.document_id == document_id)
+                )
+            ))
+            session.execute(delete(Chunk).filter(Chunk.document_id == document_id))
+            session.flush()
+
+            doc_data = self.process_file(file_path, metadata=metadata)
+            doc_metadata = doc_data["metadata"]
+
+            doc.filename = doc_data["filename"]
+            doc.filetype = doc_data["filetype"]
+            doc.filesize = doc_data["filesize"]
+            doc.title = doc_metadata.get("title", doc.title)
+            doc.author = doc_metadata.get("author", doc.author)
+            doc.category = doc_metadata.get("category", doc.category)
+            doc.metadata_ = doc_metadata
+
+            if doc_data["filetype"] == "code":
+                chunks_data = self.chunker.chunk_code(
+                    doc_data["text"],
+                    doc.id,
+                    doc_data["metadata"].get("original_path", ""),
+                )
+            else:
+                chunks_data = self.chunker.chunk_text(
+                    doc_data["text"],
+                    doc.id,
+                    doc_data["metadata"],
+                )
+
+            if not chunks_data:
+                session.rollback()
+                return {"success": False, "message": "No chunks extracted"}
+
+            max_chunks = config.chunking.max_chunks_per_doc
+            if len(chunks_data) > max_chunks:
+                chunks_data = chunks_data[:max_chunks]
+
+            total_tokens = 0
+            for chunk_data in chunks_data:
+                chunk = Chunk(
+                    document_id=doc.id,
+                    content=chunk_data["content"],
+                    token_count=chunk_data["token_count"],
+                    chunk_index=chunk_data["chunk_index"],
+                    metadata_=chunk_data.get("metadata", {}),
+                )
+                session.add(chunk)
+                session.flush()
+                total_tokens += chunk.token_count
+
+                embedding = self.embedder.embed(chunk.content)
+                if embedding is None:
+                    logger.warning(f"Failed to embed chunk {chunk.id}")
+                    continue
+                emb = Embedding(
+                    chunk_id=chunk.id,
+                    embedding=embedding,
+                    model=self.embedder.model_name,
+                    dimensions=len(embedding),
+                )
+                session.add(emb)
+
+            session.commit()
+
+            return {
+                "success": True,
+                "document_id": doc.id,
+                "filename": doc.filename,
+                "old_chunks_deleted": True,
+                "new_chunks": len(chunks_data),
+                "tokens": total_tokens,
+            }
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to update document {document_id}: {e}")
+            return {"success": False, "message": str(e)}
+        finally:
+            if should_close:
+                session.close()
+
+    def update_document_metadata(
+        self,
+        document_id: int,
+        metadata: Dict[str, Any],
+        session=None,
+    ) -> Dict[str, Any]:
+        """Update metadata fields on an existing document."""
+        from ..storage.db import get_session
+
+        should_close = False
+        if session is None:
+            session = get_session()
+            should_close = True
+
+        try:
+            doc = session.query(Document).filter(Document.id == document_id).first()
+            if not doc:
+                return {"success": False, "message": "Document not found"}
+
+            current = dict(doc.metadata_ or {})
+            current.update(metadata)
+            doc.metadata_ = current
+
+            for key in ["title", "author", "category", "importance", "pinned"]:
+                if key in metadata:
+                    setattr(doc, key, metadata[key])
+
+            session.commit()
+            return {"success": True, "document_id": doc.id}
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to update metadata for {document_id}: {e}")
+            return {"success": False, "message": str(e)}
+        finally:
+            if should_close:
+                session.close()
+
+    def rename_document(
+        self,
+        document_id: int,
+        new_filename: str,
+        session=None,
+    ) -> Dict[str, Any]:
+        """Rename a document without changing its content."""
+        from ..storage.db import get_session
+
+        should_close = False
+        if session is None:
+            session = get_session()
+            should_close = True
+
+        try:
+            doc = session.query(Document).filter(Document.id == document_id).first()
+            if not doc:
+                return {"success": False, "message": "Document not found"}
+
+            old_name = doc.filename
+            doc.filename = new_filename
+
+            if doc.metadata_:
+                doc.metadata_["original_filename"] = old_name
+
+            session.commit()
+            return {"success": True, "document_id": doc.id, "old_name": old_name, "new_name": new_filename}
+
+        except Exception as e:
+            session.rollback()
+            logger.error(f"Failed to rename document {document_id}: {e}")
+            return {"success": False, "message": str(e)}
+        finally:
+            if should_close:
+                session.close()

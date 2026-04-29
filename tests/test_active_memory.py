@@ -306,6 +306,68 @@ class TestMCPServer:
         assert "top_k" in search_tool.inputSchema["properties"]
         assert "filetype" in search_tool.inputSchema["properties"]
 
+    def test_new_tools_registered(self):
+        """New Phase 2 tools are registered."""
+        import asyncio
+        from active_memory_mcp.api.mcp_server import handle_list_tools
+
+        tools = asyncio.run(handle_list_tools())
+        tool_names = [t.name for t in tools]
+
+        assert "update_document" in tool_names
+        assert "bulk_search" in tool_names
+        assert "update_document_metadata" in tool_names
+        assert "search_by_date" in tool_names
+        assert "rename_document" in tool_names
+
+    def test_update_document_tool_schema(self):
+        """update_document tool has correct schema."""
+        import asyncio
+        from active_memory_mcp.api.mcp_server import handle_list_tools
+
+        tools = asyncio.run(handle_list_tools())
+        tool = next(t for t in tools if t.name == "update_document")
+
+        assert "document_id" in tool.inputSchema["properties"]
+        assert "file_path" in tool.inputSchema["properties"]
+        assert "document_id" in tool.inputSchema["required"]
+        assert "file_path" in tool.inputSchema["required"]
+
+    def test_bulk_search_tool_schema(self):
+        """bulk_search tool has correct schema."""
+        import asyncio
+        from active_memory_mcp.api.mcp_server import handle_list_tools
+
+        tools = asyncio.run(handle_list_tools())
+        tool = next(t for t in tools if t.name == "bulk_search")
+
+        assert "queries" in tool.inputSchema["properties"]
+        assert "queries" in tool.inputSchema["required"]
+        assert tool.inputSchema["properties"]["queries"]["type"] == "array"
+
+    def test_search_by_date_tool_schema(self):
+        """search_by_date tool has correct schema."""
+        import asyncio
+        from active_memory_mcp.api.mcp_server import handle_list_tools
+
+        tools = asyncio.run(handle_list_tools())
+        tool = next(t for t in tools if t.name == "search_by_date")
+
+        assert "query" in tool.inputSchema["properties"]
+        assert "date_from" in tool.inputSchema["properties"]
+        assert "date_to" in tool.inputSchema["properties"]
+
+    def test_rename_document_tool_schema(self):
+        """rename_document tool has correct schema."""
+        import asyncio
+        from active_memory_mcp.api.mcp_server import handle_list_tools
+
+        tools = asyncio.run(handle_list_tools())
+        tool = next(t for t in tools if t.name == "rename_document")
+
+        assert "document_id" in tool.inputSchema["properties"]
+        assert "new_filename" in tool.inputSchema["properties"]
+
 
 class TestWebServer:
     """Test web dashboard server."""
@@ -338,6 +400,101 @@ class TestMemoryDB:
         db_path = Path(__file__).parent.parent / "active_memory.db"
         # Database may or may not exist depending on setup
         assert db_path.parent.exists()
+
+
+class TestPhase2Processor:
+    """Test Phase 2 DocumentProcessor methods."""
+
+    def test_update_document_not_found(self):
+        """update_document returns error for non-existent document."""
+        import os
+        os.environ["AM_WEB_SQLITE"] = "true"
+        from active_memory_mcp.ingest.processor import DocumentProcessor
+        from active_memory_mcp.storage.db import _engine
+        if _engine is not None:
+            from active_memory_mcp.storage.db import init_db
+            init_db()
+        proc = DocumentProcessor()
+        result = proc.update_document(99999, "/nonexistent/file.txt")
+        assert result["success"] is False
+        assert "not found" in result["message"].lower()
+
+    def test_update_metadata_not_found(self):
+        """update_document_metadata returns error for non-existent document."""
+        import os
+        os.environ["AM_WEB_SQLITE"] = "true"
+        from active_memory_mcp.ingest.processor import DocumentProcessor
+        proc = DocumentProcessor()
+        result = proc.update_document_metadata(99999, {"title": "Test"})
+        assert result["success"] is False
+        assert "not found" in result["message"].lower()
+
+    def test_rename_document_not_found(self):
+        """rename_document returns error for non-existent document."""
+        import os
+        os.environ["AM_WEB_SQLITE"] = "true"
+        from active_memory_mcp.ingest.processor import DocumentProcessor
+        proc = DocumentProcessor()
+        result = proc.rename_document(99999, "new_name.txt")
+        assert result["success"] is False
+        assert "not found" in result["message"].lower()
+
+
+class TestPhase2Searcher:
+    """Test Phase 2 HybridSearcher methods."""
+
+    def test_bulk_search_returns_dict(self):
+        """bulk_search returns dict with query keys."""
+        from active_memory_mcp.search.searcher import HybridSearcher
+        searcher = HybridSearcher()
+        results = searcher.bulk_search(["test query one", "test query two"], top_k=2)
+        assert isinstance(results, dict)
+        assert "test query one" in results
+        assert "test query two" in results
+        assert isinstance(results["test query one"], list)
+        assert isinstance(results["test query two"], list)
+
+    def test_search_by_date_returns_list(self):
+        """search_by_date returns list of SearchResult."""
+        from active_memory_mcp.search.searcher import HybridSearcher, SearchResult
+        searcher = HybridSearcher()
+        results = searcher.search_by_date("test", top_k=2)
+        assert isinstance(results, list)
+        for r in results:
+            assert isinstance(r, SearchResult)
+
+    def test_apply_filters_date_from(self):
+        """_apply_filters handles date_from filter."""
+        from active_memory_mcp.search.searcher import HybridSearcher
+        from active_memory_mcp.storage.db import Document
+        searcher = HybridSearcher()
+        # Create a mock query object
+        class MockQuery:
+            def __init__(self):
+                self.filters_applied = []
+            def filter(self, condition):
+                self.filters_applied.append(condition)
+                return self
+
+        mock_query = MockQuery()
+        result = searcher._apply_filters(mock_query, {"date_from": "2025-01-01T00:00:00"})
+        assert len(result.filters_applied) == 1
+
+    def test_apply_filters_invalid_date(self):
+        """_apply_filters gracefully handles invalid dates."""
+        from active_memory_mcp.search.searcher import HybridSearcher
+        searcher = HybridSearcher()
+        class MockQuery:
+            def __init__(self):
+                self.filters_applied = []
+            def filter(self, condition):
+                self.filters_applied.append(condition)
+                return self
+
+        mock_query = MockQuery()
+        result = searcher._apply_filters(mock_query, {"date_from": "not-a-date"})
+        # Should not raise, just skip the invalid filter
+        assert len(result.filters_applied) == 0
 
 
 class TestAPIEndpoints:
