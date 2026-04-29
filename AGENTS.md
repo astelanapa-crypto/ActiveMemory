@@ -14,7 +14,7 @@ ActiveMemory — память контекста и хранилище знан�
 - `storage/` — БД слой (SQLAlchemy, PostgreSQL + pgvector, SQLite fallback)
 - `ingest/` — обработка документов и чанкинг (PDF через PyPDF2, text, code файлы)
 - `search/` — гибридный поиск (vector similarity + keyword matching, embeddings через FastEmbed)
-- `api/` — MCP сервер с 6 tools
+- `api/` — MCP сервер с 14 tools
 - `web/` — FastAPI дашборд (порт 8788, русскоязычный UI)
 
 **Два entry point:**
@@ -55,7 +55,7 @@ ActiveMemory — память контекста и хранилище знан�
 | `AM_REDIS_URL` | redis://localhost:6379/0 | Redis URL |
 | `AM_CACHE_TTL` | 3600 | TTL кэша секунды |
 
-## MCP Tools (6 штук)
+## MCP Tools (14 штук)
 
 - `search_memory(query, top_k, filetype)` — гибридный поиск
 - `store_document(file_path, metadata)` — ingest файла
@@ -63,28 +63,38 @@ ActiveMemory — память контекста и хранилище знан�
 - `get_document(document_id)` — детали документа
 - `delete_document(document_id)` — удаление с cascade
 - `get_stats()` — статистика (документы, чанки, эмбеддинги, токены)
+- `update_document(document_id, metadata)` — обновление метаданных
+- `bulk_search(queries)` — несколько поисков одним вызовом
+- `update_document_metadata(document_id, metadata)` — обновление только метаданных
+- `search_by_date(query, date_from, date_to)` — поиск по диапазону дат
+- `rename_document(document_id, new_filename)` — переименование
+- `smart_context(query, max_tokens)` — контекст с лимитом токенов
+- `get_context(max_tokens, pinned, important)` — авто-сбор важного контекста
+- `reindex_embeddings(document_id)` — пересчёт эмбеддингов
 
-## Известные ограничения текущей версии
+## Web Dashboard (Phase 4)
 
-Текущий код имеет архитектурные проблемы. **TODO.md** (в корне проекта) содержит полный план исправлений.
+Дашборд включает:
+- **Тёмная/светлая тема** — CSS переменные, toggle в sidebar, localStorage
+- **Drag-n-drop загрузка** — multi-file upload с прогресс-баром через XHR
+- **Preview документов** — модальное окно с markdown рендером (marked.js)
+- **Графики** — Chart.js: активность, категории, важность, типы файлов
+- **Новые API:** `GET /api/documents/{id}/content`, `GET /api/activity`
 
-**Основные проблемы:**
-1. Эмбеддинги хранятся как JSON text в БД, не как pgvector Vector тип → векторный поиск делается brute-force в Python (O(n))
-2. Keyword search использует `ilike('%token%')` вместо PostgreSQL FTS → нет морфологии, нет ранжирования
-3. CacheConfig существует но не используется → Redis кэш эмбеддингов не подключён
-4. MemoryCache SQLAlchemy модель существует но никем не используется → мёртвый код
-5. Remote embedding API (AM_EMBEDDING_ENDPOINT) настроен но не подключён → всегда используется FastEmbed или fallback
-6. Fallback эмбеддинги на простом hash() → семантически бессмысленные вектора (cat и kitten ортогональны)
+## Известные ограничения
 
-**TODO.md покрывает:**
-- Интеграцию pgvector Vector типа
-- HNSW индекс для быстрого векторного поиска
-- PostgreSQL FTS для keyword search
-- Redis кэш эмбеддингов с in-memory fallback
-- Подключение remote embedding API
-- N-gram fallback с семантической близостью
-- Обновление тестов
-- Graceful degradation для SQLite fallback
+**Решено (Phase 1-3):**
+1. ~~pgvector Vector тип~~ — интегрирован, HNSW индекс настроен
+2. ~~PostgreSQL FTS~~ — tsvector + GIN индекс + auto-update trigger
+3. ~~Redis cache~~ — подключён с in-memory fallback
+4. ~~MemoryCache мёртвый код~~ — удалён
+5. ~~N-gram fallback~~ — character-level n-gram hash, семантическая близость
+
+**Остаётся:**
+- SQLite fallback не поддерживает Vector/FTS (cosine similarity в Python + ilike)
+- Remote embedding API (AM_EMBEDDING_ENDPOINT) не подключён — всегда FastEmbed или fallback
+- In-memory cache не имеет LRU eviction (растёт без ограничений)
+- top_k=0 в search возвращает default результаты (должен возвращать [])
 
 ## Тестирование
 

@@ -15,7 +15,6 @@ from ..ingest.processor import DocumentProcessor
 from ..search.embedder import Embedder
 from ..search.searcher import HybridSearcher
 from ..storage.db import Chunk, Document, Embedding, get_backend, get_session, init_db
-from ..storage.db import serialize_embedding
 
 
 processor = DocumentProcessor()
@@ -100,7 +99,7 @@ def _store_text_memory(
             session.add(
                 Embedding(
                     chunk_id=chunk.id,
-                    embedding=serialize_embedding(vector),
+                    embedding=vector,
                     model=embedder.model_name,
                     dimensions=len(vector) if vector else config.embedding.dimensions,
                 )
@@ -318,6 +317,116 @@ async def delete_document(document_id: int):
         session.close()
 
 
+@app.get("/api/documents/{document_id}/content")
+async def get_document_content(document_id: int):
+    """Get full content of a document with all chunks concatenated."""
+    session = get_session()
+    try:
+        doc = session.query(Document).filter(Document.id == document_id).first()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        chunks = sorted(doc.chunks, key=lambda c: c.chunk_index)
+        full_content = "\n\n---\n\n".join(c.content for c in chunks)
+        chunk_details = [
+            {
+                "index": c.chunk_index,
+                "token_count": c.token_count,
+                "content_preview": c.content[:300],
+                "full_length": len(c.content),
+            }
+            for c in chunks
+        ]
+        return {
+            "id": doc.id,
+            "filename": doc.filename,
+            "filetype": doc.filetype,
+            "title": doc.title or doc.filename,
+            "category": doc.category,
+            "importance": doc.importance,
+            "pinned": doc.pinned,
+            "chunks_count": len(chunks),
+            "total_tokens": sum(c.token_count for c in chunks),
+            "content": full_content,
+            "chunk_details": chunk_details,
+            "created_at": doc.created_at.isoformat() if doc.created_at else None,
+        }
+    finally:
+        session.close()
+
+
+@app.get("/api/activity")
+async def get_activity_data():
+    """Get activity data for charts: documents per day, category sizes, importance distribution."""
+    session = get_session()
+    try:
+        from sqlalchemy import extract as sa_extract
+
+        daily = (
+            session.query(
+                sa_extract("year", Document.created_at).label("year"),
+                sa_extract("month", Document.created_at).label("month"),
+                sa_extract("day", Document.created_at).label("day"),
+                func.count(Document.id),
+                func.sum(Document.filesize).label("total_size"),
+            )
+            .group_by("year", "month", "day")
+            .order_by("year", "month", "day")
+            .all()
+        )
+        daily_chart = [
+            {
+                "date": f"{int(y):04d}-{int(m):02d}-{int(d):02d}",
+                "count": cnt,
+                "size_bytes": int(total_size or 0),
+            }
+            for y, m, d, cnt, total_size in daily
+        ]
+
+        category_sizes = (
+            session.query(
+                Document.category,
+                func.count(Document.id),
+                func.sum(Document.filesize),
+                func.avg(Document.filesize),
+            )
+            .group_by(Document.category)
+            .all()
+        )
+        category_chart = [
+            {
+                "name": cat or "general",
+                "count": cnt,
+                "total_bytes": int(total or 0),
+                "avg_bytes": int(avg or 0),
+            }
+            for cat, cnt, total, avg in category_sizes
+        ]
+
+        importance_dist = (
+            session.query(Document.importance, func.count(Document.id))
+            .group_by(Document.importance)
+            .order_by(Document.importance)
+            .all()
+        )
+        importance_chart = [{"level": lvl, "count": cnt} for lvl, cnt in importance_dist]
+
+        filetype_dist = (
+            session.query(Document.filetype, func.count(Document.id))
+            .group_by(Document.filetype)
+            .all()
+        )
+        filetype_chart = [{"type": ft, "count": cnt} for ft, cnt in filetype_dist]
+
+        return {
+            "daily": daily_chart,
+            "categories": category_chart,
+            "importance": importance_chart,
+            "filetypes": filetype_chart,
+        }
+    finally:
+        session.close()
+
+
 def main():
     import uvicorn
 
@@ -330,31 +439,56 @@ DASHBOARD_HTML = r"""<!doctype html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ActiveMemory</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@14.1.3/marked.min.js"></script>
 <style>
-:root{
+:root,[data-theme="light"]{
   --bg:#f4f7fb;--surface:#ffffff;--surface-2:#f8fafc;--ink:#101828;--muted:#667085;
   --line:#d9e2ec;--line-strong:#b8c4d2;--brand:#0f766e;--brand-2:#2563eb;
   --accent:#b7791f;--danger:#b42318;--ok:#067647;--shadow:0 18px 44px rgba(16,24,40,.10);
   --radius:8px;--sidebar:#0d1726;--sidebar-2:#162235;--sidebar-text:#e8eef7;
+  --drop-bg:#f0fdf4;--drop-border:#86efac;--drop-hover:#bbf7d0;
+  --preview-bg:#ffffff;--code-bg:#f3f4f6;
 }
-*{box-sizing:border-box}html{min-width:320px}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;line-height:1.45;letter-spacing:0}
+[data-theme="dark"]{
+  --bg:#0a0f1a;--surface:#1a2235;--surface-2:#1f2942;--ink:#e5e7eb;--muted:#9ca3af;
+  --line:#2a3548;--line-strong:#3a4a60;--brand:#10b981;--brand-2:#06b6d4;
+  --accent:#f59e0b;--danger:#ef4444;--ok:#22c55e;--shadow:0 18px 44px rgba(0,0,0,.4);
+  --radius:8px;--sidebar:#0d1726;--sidebar-2:#111827;--sidebar-text:#e8eef7;
+  --drop-bg:#0f1a0f;--drop-border:#166534;--drop-hover:#14532d;
+  --preview-bg:#1a2235;--code-bg:#111827;
+}
+*{box-sizing:border-box}html{min-width:320px}body{margin:0;background:var(--bg);color:var(--ink);font-family:Inter,ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;line-height:1.45;letter-spacing:0;transition:background .3s,color .3s}
 button,input,select,textarea{font:inherit;letter-spacing:0}button{cursor:pointer}h1,h2,h3,p{margin:0}.app{display:grid;grid-template-columns:272px minmax(0,1fr);min-height:100vh}
-.sidebar{background:var(--sidebar);color:var(--sidebar-text);padding:18px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:18px}
-.brand{display:flex;gap:10px;align-items:center}.mark{width:34px;height:34px;border-radius:8px;background:var(--brand);display:grid;place-items:center;font-weight:800;color:white}.brand-title{font-weight:800;font-size:18px}.brand-sub{color:#a9b6c8;font-size:12px}
+.sidebar{background:var(--sidebar);color:var(--sidebar-text);padding:18px;position:sticky;top:0;height:100vh;display:flex;flex-direction:column;gap:18px;transition:background .3s}
+.brand{display:flex;gap:10px;align-items:center}.mark{width:34px;height:34px;border-radius:8px;background:var(--brand);display:grid;place-items:center;font-weight:800;color:white;transition:background .3s}.brand-title{font-weight:800;font-size:18px}.brand-sub{color:#a9b6c8;font-size:12px}
 .status{border:1px solid rgba(255,255,255,.12);background:var(--sidebar-2);border-radius:var(--radius);padding:12px;display:grid;gap:8px}.status-line{display:flex;justify-content:space-between;gap:10px;font-size:12px;color:#b9c6d7}.status strong{color:white;font-size:13px}.dot{width:8px;height:8px;border-radius:50%;background:#28c76f;display:inline-block;margin-right:6px}
 .nav{display:grid;gap:6px}.nav button{border:1px solid transparent;background:transparent;color:#bdc8d8;border-radius:var(--radius);padding:11px 12px;text-align:left;display:flex;gap:10px;align-items:center}.nav button:hover,.nav button.active{background:#1c2a40;border-color:#30435f;color:white}.nav .ico{width:18px;text-align:center;color:#8bc4ff}
+.theme-toggle{display:flex;align-items:center;gap:8px;padding:10px 12px;border-radius:var(--radius);background:var(--sidebar-2);border:1px solid rgba(255,255,255,.1);cursor:pointer;color:#bdc8d8;font-size:13px;font-weight:600}.theme-toggle:hover{background:#1c2a40;color:white}.theme-toggle .icon{font-size:16px}
 .side-foot{margin-top:auto;font-size:12px;color:#9dadc2;border-top:1px solid rgba(255,255,255,.10);padding-top:14px}
-.main{padding:24px;max-width:1520px;width:100%;margin:0 auto}.command{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;margin-bottom:16px}
+.main{padding:24px;max-width:1520px;width:100%;margin:0 auto}.command{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);box-shadow:var(--shadow);padding:20px;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:18px;align-items:center;margin-bottom:16px;transition:background .3s,border-color .3s}
 .eyebrow{color:var(--brand);font-size:12px;text-transform:uppercase;font-weight:800;margin-bottom:6px}.command h1{font-size:28px;line-height:1.12}.command p{color:var(--muted);max-width:760px;margin-top:8px}.actions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}
-.btn{border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);border-radius:var(--radius);padding:10px 12px;font-weight:700;min-height:40px;display:inline-flex;gap:8px;align-items:center;justify-content:center}.btn:hover{border-color:var(--brand);color:var(--brand)}.btn.primary{background:var(--brand);border-color:var(--brand);color:white}.btn.blue{background:var(--brand-2);border-color:var(--brand-2);color:white}.btn.danger{color:var(--danger);border-color:#f2b8b5;background:#fff7f7}.btn.slim{padding:7px 10px;min-height:34px;font-size:13px}
-.view{display:none}.view.active{display:block}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px;min-height:116px}.metric-label{font-size:12px;color:var(--muted);font-weight:800;text-transform:uppercase}.metric-value{font-size:32px;font-weight:850;margin-top:8px;color:var(--ink)}.metric-note{font-size:12px;color:var(--muted);margin-top:4px}
-.layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;margin-top:14px}.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px}.panel-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}.panel h2{font-size:17px}.panel p{color:var(--muted);font-size:13px;margin-top:4px}
-.list{display:grid;gap:10px}.memory-row{border:1px solid var(--line);background:var(--surface-2);border-radius:var(--radius);padding:13px;display:grid;gap:10px}.row-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.memory-row h3{font-size:15px;line-height:1.25}.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{border:1px solid var(--line);background:white;color:var(--muted);border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700}.chip.pin{color:#8a5a00;background:#fff7df;border-color:#eed28a}.preview{color:#475467;font-size:13px;overflow-wrap:anywhere}.row-actions{display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);border-radius:var(--radius);padding:10px 12px;font-weight:700;min-height:40px;display:inline-flex;gap:8px;align-items:center;justify-content:center;transition:all .2s}.btn:hover{border-color:var(--brand);color:var(--brand)}.btn.primary{background:var(--brand);border-color:var(--brand);color:white}.btn.blue{background:var(--brand-2);border-color:var(--brand-2);color:white}.btn.danger{color:var(--danger);border-color:#f2b8b5;background:#fff7f7}.btn.danger:hover{background:var(--danger);color:white}.btn.slim{padding:7px 10px;min-height:34px;font-size:13px}
+.view{display:none}.view.active{display:block}.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.metric-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:14px;min-height:116px;transition:background .3s,border-color .3s}.metric-label{font-size:12px;color:var(--muted);font-weight:800;text-transform:uppercase}.metric-value{font-size:32px;font-weight:850;margin-top:8px;color:var(--ink)}.metric-note{font-size:12px;color:var(--muted);margin-top:4px}
+.layout{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px;margin-top:14px}.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;transition:background .3s,border-color .3s}.panel-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:12px}.panel h2{font-size:17px}.panel p{color:var(--muted);font-size:13px;margin-top:4px}
+.list{display:grid;gap:10px}.memory-row{border:1px solid var(--line);background:var(--surface-2);border-radius:var(--radius);padding:13px;display:grid;gap:10px;transition:background .3s,border-color .3s}.row-top{display:flex;justify-content:space-between;gap:10px;align-items:flex-start}.memory-row h3{font-size:15px;line-height:1.25;cursor:pointer;color:var(--brand)}.memory-row h3:hover{text-decoration:underline}.chips{display:flex;gap:6px;flex-wrap:wrap}.chip{border:1px solid var(--line);background:var(--surface);color:var(--muted);border-radius:999px;padding:3px 8px;font-size:12px;font-weight:700}.chip.pin{color:#8a5a00;background:#fff7df;border-color:#eed28a}.preview{color:#475467;font-size:13px;overflow-wrap:anywhere}.row-actions{display:flex;gap:8px;flex-wrap:wrap}
 .category-row{display:grid;grid-template-columns:1fr auto;gap:8px;border-bottom:1px solid var(--line);padding:9px 0}.category-row:last-child{border-bottom:0}.category-name{font-weight:700}.category-count{color:var(--brand);font-weight:800}
-.searchbar{display:grid;grid-template-columns:minmax(0,1fr) 170px 140px auto;gap:10px;margin-bottom:14px}.field{display:grid;gap:6px;margin-bottom:12px}.field span{font-size:12px;color:var(--muted);font-weight:800}input,select,textarea{width:100%;border:1px solid var(--line-strong);border-radius:var(--radius);background:white;color:var(--ink);padding:10px 11px;min-height:40px}textarea{min-height:160px;resize:vertical}input:focus,select:focus,textarea:focus{outline:2px solid rgba(15,118,110,.18);border-color:var(--brand)}
-.forms{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px}.split{display:grid;grid-template-columns:1fr 150px;gap:10px}.check{display:flex;gap:8px;align-items:center;color:#344054;font-weight:700;margin-bottom:12px}.check input{width:16px;min-height:16px}.context-box{background:#0e1624;color:#e8eef7;border-radius:var(--radius);padding:16px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;min-height:360px;max-height:520px;overflow:auto}
+.searchbar{display:grid;grid-template-columns:minmax(0,1fr) 170px 140px auto;gap:10px;margin-bottom:14px}.field{display:grid;gap:6px;margin-bottom:12px}.field span{font-size:12px;color:var(--muted);font-weight:800}input,select,textarea{width:100%;border:1px solid var(--line-strong);border-radius:var(--radius);background:var(--surface);color:var(--ink);padding:10px 11px;min-height:40px;transition:background .3s,border-color .3s}textarea{min-height:160px;resize:vertical}input:focus,select:focus,textarea:focus{outline:2px solid rgba(15,118,110,.18);border-color:var(--brand)}
+.forms{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px}.split{display:grid;grid-template-columns:1fr 150px;gap:10px}.check{display:flex;gap:8px;align-items:center;color:var(--muted);font-weight:700;margin-bottom:12px}.check input{width:16px;min-height:16px}.context-box{background:#0e1624;color:#e8eef7;border-radius:var(--radius);padding:16px;white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;min-height:360px;max-height:520px;overflow:auto}
 .empty{border:1px dashed var(--line-strong);border-radius:var(--radius);padding:22px;text-align:center;color:var(--muted);background:var(--surface-2)}.toast{position:fixed;right:18px;bottom:18px;background:#101828;color:white;border-radius:var(--radius);box-shadow:var(--shadow);padding:12px 14px;display:none;max-width:360px;z-index:20}.toast.show{display:block}.toast.error{background:#7a271a}
-@media(max-width:1020px){.app{grid-template-columns:1fr}.sidebar{position:static;height:auto;display:grid;grid-template-columns:1fr;gap:12px}.nav{grid-template-columns:repeat(4,1fr)}.nav button{justify-content:center;text-align:center}.side-foot{display:none}.command{grid-template-columns:1fr}.actions{justify-content:flex-start}.layout,.forms{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.searchbar{grid-template-columns:1fr 1fr}}
+
+/* Drag-n-drop upload zone */
+.dropzone{border:2px dashed var(--line-strong);border-radius:var(--radius);padding:40px 20px;text-align:center;transition:all .2s;cursor:pointer;position:relative}.dropzone:hover,.dropzone.drag-over{border-color:var(--brand);background:var(--drop-bg)}.dropzone.drag-over{transform:scale(1.01)}.dropzone-icon{font-size:48px;margin-bottom:12px;opacity:.6}.dropzone-text{font-size:14px;color:var(--muted);font-weight:600}.dropzone-hint{font-size:12px;color:var(--muted);margin-top:6px;opacity:.7}.dropzone input[type="file"]{position:absolute;inset:0;opacity:0;cursor:pointer}
+.upload-queue{display:grid;gap:8px;margin-top:12px}.upload-item{display:flex;align-items:center;gap:12px;padding:10px 14px;background:var(--surface-2);border:1px solid var(--line);border-radius:var(--radius);font-size:13px}.upload-item .name{flex:1;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.upload-item .status{font-size:12px;color:var(--muted);min-width:70px;text-align:right}.upload-progress{height:4px;background:var(--line);border-radius:2px;overflow:hidden;width:120px}.upload-progress-bar{height:100%;background:var(--brand);border-radius:2px;transition:width .3s}.upload-item.done .status{color:var(--ok)}.upload-item.error .status{color:var(--danger)}
+
+/* Preview modal */
+.modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:100;display:none;align-items:center;justify-content:center;padding:24px}.modal-overlay.open{display:flex}.modal{background:var(--surface);border:1px solid var(--line);border-radius:12px;max-width:900px;width:100%;max-height:85vh;display:flex;flex-direction:column;box-shadow:var(--shadow);overflow:hidden}.modal-header{display:flex;justify-content:space-between;align-items:center;padding:16px 20px;border-bottom:1px solid var(--line);flex-shrink:0}.modal-header h3{font-size:16px;font-weight:700}.modal-close{background:none;border:none;font-size:22px;color:var(--muted);cursor:pointer;padding:4px 8px;border-radius:6px}.modal-close:hover{background:var(--surface-2);color:var(--ink)}.modal-body{padding:20px;overflow-y:auto;flex:1}.modal-body .rendered-markdown{line-height:1.7}.modal-body .rendered-markdown pre{background:var(--code-bg);padding:14px;border-radius:8px;overflow-x:auto;font-size:13px}.modal-body .rendered-markdown code{background:var(--code-bg);padding:2px 6px;border-radius:4px;font-size:13px}.modal-body .rendered-markdown pre code{background:none;padding:0}.modal-body .plain-text{white-space:pre-wrap;font-family:ui-monospace,SFMono-Regular,Consolas,monospace;font-size:13px;color:var(--muted)}.modal-meta{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px}.modal-meta .chip{font-size:11px}
+.chunk-list{margin-top:20px;border-top:1px solid var(--line);padding-top:16px}.chunk-item{padding:10px 0;border-bottom:1px solid var(--line)}.chunk-item:last-child{border-bottom:none}.chunk-label{font-size:11px;color:var(--muted);font-weight:700;margin-bottom:4px}.chunk-preview{font-size:12px;color:var(--muted);white-space:pre-wrap}
+
+/* Charts */
+.charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:14px}.chart-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px;transition:background .3s,border-color .3s}.chart-card h3{font-size:14px;font-weight:700;margin-bottom:12px;color:var(--muted);text-transform:uppercase;letter-spacing:.5px}.chart-canvas-wrap{position:relative;height:240px}
+
+@media(max-width:1020px){.app{grid-template-columns:1fr}.sidebar{position:static;height:auto;display:grid;grid-template-columns:1fr;gap:12px}.nav{grid-template-columns:repeat(4,1fr)}.nav button{justify-content:center;text-align:center}.side-foot{display:none}.command{grid-template-columns:1fr}.actions{justify-content:flex-start}.layout,.forms{grid-template-columns:1fr}.metrics{grid-template-columns:repeat(2,1fr)}.searchbar{grid-template-columns:1fr 1fr}.charts-grid{grid-template-columns:1fr}}
 @media(max-width:520px){.main{padding:10px}.sidebar{padding:10px}.brand-title{font-size:16px}.brand-sub{display:none}.nav{grid-template-columns:repeat(4,minmax(0,1fr));gap:5px}.nav button{font-size:11px;padding:8px 4px;min-height:44px;display:grid;gap:3px}.nav .ico{width:auto}.command{padding:14px;margin-bottom:10px}.command h1{font-size:22px}.command p{font-size:13px}.actions .btn{flex:1 1 130px}.metrics{gap:8px}.metric-card{padding:10px;min-height:96px}.metric-value{font-size:24px}.layout{gap:10px;margin-top:10px}.panel{padding:12px}.panel-head{display:grid}.searchbar{grid-template-columns:1fr}.split{grid-template-columns:1fr}.row-top{display:grid}.row-actions .btn{flex:1 1 100px}.toast{left:10px;right:10px;bottom:10px;max-width:none}}
 </style>
 </head>
@@ -375,7 +509,12 @@ button,input,select,textarea{font:inherit;letter-spacing:0}button{cursor:pointer
       <button data-view="search"><span class="ico">02</span><span>Поиск</span></button>
       <button data-view="ingest"><span class="ico">03</span><span>Запись</span></button>
       <button data-view="context"><span class="ico">04</span><span>Контекст</span></button>
+      <button data-view="charts"><span class="ico">05</span><span>Графики</span></button>
     </nav>
+    <button class="theme-toggle" onclick="toggleTheme()">
+      <span class="icon" id="themeIcon">🌙</span>
+      <span id="themeLabel">Тёмная тема</span>
+    </button>
     <div class="side-foot">Локальный центр знаний для агента. Критичная память закрепляется в рабочем контексте.</div>
   </aside>
   <main class="main">
@@ -436,12 +575,16 @@ button,input,select,textarea{font:inherit;letter-spacing:0}button{cursor:pointer
           <label class="check"><input id="pinned" type="checkbox"> Закрепить в рабочем контексте</label>
           <button class="btn primary" type="submit">Сохранить память</button>
         </form>
-        <form class="panel" onsubmit="uploadDoc(event)">
-          <div class="panel-head"><div><h2>Индексировать документ</h2><p>PDF, markdown, текст и код попадут в общий контур поиска.</p></div></div>
-          <label class="field"><span>Файл</span><input id="file" type="file" required></label>
-          <label class="field"><span>Категория</span><select id="upCat"><option>knowledge</option><option>project</option><option>agent</option></select></label>
-          <button class="btn blue" type="submit">Загрузить и обработать</button>
-        </form>
+        <div class="panel">
+          <div class="panel-head"><div><h2>Индексировать документы</h2><p>Перетащите файлы сюда или нажмите для выбора.</p></div></div>
+          <div class="dropzone" id="dropzone">
+            <div class="dropzone-icon">📁</div>
+            <div class="dropzone-text">Перетащите файлы сюда</div>
+            <div class="dropzone-hint">PDF, TXT, MD, PY, JS, TS и другие</div>
+            <input id="fileInput" type="file" multiple>
+          </div>
+          <div class="upload-queue" id="uploadQueue"></div>
+        </div>
       </div>
     </section>
 
@@ -454,8 +597,30 @@ button,input,select,textarea{font:inherit;letter-spacing:0}button{cursor:pointer
         <div class="context-box" id="ctx"></div>
       </div>
     </section>
+
+    <section id="charts" class="view">
+      <div class="metrics" id="chartMetrics"></div>
+      <div class="charts-grid">
+        <div class="chart-card"><h3>Активность по дням</h3><div class="chart-canvas-wrap"><canvas id="chartActivity"></canvas></div></div>
+        <div class="chart-card"><h3>Категории</h3><div class="chart-canvas-wrap"><canvas id="chartCategories"></canvas></div></div>
+        <div class="chart-card"><h3>Распределение важности</h3><div class="chart-canvas-wrap"><canvas id="chartImportance"></canvas></div></div>
+        <div class="chart-card"><h3>Типы файлов</h3><div class="chart-canvas-wrap"><canvas id="chartFiletypes"></canvas></div></div>
+      </div>
+    </section>
   </main>
 </div>
+
+<!-- Preview Modal -->
+<div class="modal-overlay" id="previewModal">
+  <div class="modal">
+    <div class="modal-header">
+      <h3 id="previewTitle">Preview</h3>
+      <button class="modal-close" onclick="closePreview()">✕</button>
+    </div>
+    <div class="modal-body" id="previewBody"></div>
+  </div>
+</div>
+
 <div class="toast" id="toast"></div>
 <script>
 const $ = id => document.getElementById(id);
@@ -477,6 +642,7 @@ function switchView(name) {
   document.querySelectorAll('.nav button,.view').forEach(el => el.classList.remove('active'));
   document.querySelector(`[data-view="${name}"]`)?.classList.add('active');
   $(name).classList.add('active');
+  if (name === 'charts') loadCharts();
 }
 function quickFocus() {
   switchView('search');
@@ -508,7 +674,7 @@ function renderDocs(items, target='docs') {
   $(target).innerHTML = items.length ? items.map(d => `
     <article class="memory-row">
       <div class="row-top">
-        <h3>${d.pinned ? '<span class="chip pin">PIN</span> ' : ''}${esc(d.title)}</h3>
+        <h3 onclick="openPreview(${d.id})">${d.pinned ? '<span class="chip pin">PIN</span> ' : ''}${esc(d.title)}</h3>
         <button class="btn danger slim" onclick="delDoc(${d.id})">Удалить</button>
       </div>
       <div class="chips">
@@ -521,6 +687,7 @@ function renderDocs(items, target='docs') {
       <div class="row-actions">
         <button class="btn slim" onclick="patchDoc(${d.id},${!d.pinned},null)">${d.pinned ? 'Открепить' : 'Закрепить'}</button>
         <button class="btn slim" onclick="patchDoc(${d.id},null,1)">Сделать critical</button>
+        <button class="btn slim" onclick="openPreview(${d.id})">Предпросмотр</button>
       </div>
     </article>`).join('') : '<div class="empty">Память пуста. Добавьте первую запись или загрузите документ.</div>';
 }
@@ -557,18 +724,199 @@ async function storeMemory(e) {
   toast('Память сохранена');
   refreshAll();
 }
-async function uploadDoc(e) {
-  e.preventDefault();
-  const file = $('file').files[0];
-  if (!file) return toast('Выберите файл', 'error');
-  const form = new FormData();
-  form.append('file', file);
-  form.append('category', $('upCat').value);
-  await api('/api/upload', {method:'POST', body:form});
-  $('file').value = '';
-  toast('Документ загружен');
+
+/* Drag-n-drop multiupload */
+const dropzone = $('dropzone');
+const fileInput = $('fileInput');
+const uploadQueue = $('uploadQueue');
+['dragenter','dragover'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.add('drag-over'); }));
+['dragleave','drop'].forEach(ev => dropzone.addEventListener(ev, e => { e.preventDefault(); dropzone.classList.remove('drag-over'); }));
+dropzone.addEventListener('drop', e => handleFiles(e.dataTransfer.files));
+fileInput.addEventListener('change', e => handleFiles(e.target.files));
+
+async function handleFiles(files) {
+  if (!files.length) return;
+  for (const file of files) {
+    const item = document.createElement('div');
+    item.className = 'upload-item';
+    item.innerHTML = `<span class="name">${esc(file.name)}</span><div class="upload-progress"><div class="upload-progress-bar" style="width:0%"></div></div><span class="status">Загрузка...</span>`;
+    uploadQueue.prepend(item);
+    const bar = item.querySelector('.upload-progress-bar');
+    const status = item.querySelector('.status');
+    try {
+      const form = new FormData();
+      form.append('file', file);
+      form.append('category', $('upCat')?.value || 'knowledge');
+      const xhr = new XMLHttpRequest();
+      xhr.upload.addEventListener('progress', e => { if (e.lengthComputable) bar.style.width = (e.loaded/e.total*100)+'%'; });
+      const promise = new Promise((resolve, reject) => {
+        xhr.onload = () => xhr.status >= 200 && xhr.status < 300 ? resolve(JSON.parse(xhr.responseText)) : reject(new Error(xhr.responseText));
+        xhr.onerror = () => reject(new Error('Network error'));
+      });
+      xhr.open('POST', '/api/upload');
+      xhr.send(form);
+      const result = await promise;
+      item.classList.add('done');
+      bar.style.width = '100%';
+      status.textContent = `${result.chunks || '?'} чанков`;
+      toast(`${file.name} загружен`);
+    } catch (err) {
+      item.classList.add('error');
+      status.textContent = 'Ошибка';
+      toast(`${file.name}: ${err.message}`, 'error');
+    }
+  }
   refreshAll();
 }
+
+/* Document preview modal */
+async function openPreview(id) {
+  try {
+    const d = await api(`/api/documents/${id}/content`);
+    $('previewTitle').textContent = d.title || d.filename;
+    let meta = `<div class="modal-meta">
+      <span class="chip">${esc(d.filetype)}</span>
+      <span class="chip">${esc(d.category)}</span>
+      <span class="chip">важность ${esc(d.importance)}</span>
+      <span class="chip">${esc(d.chunks_count)} чанков</span>
+      <span class="chip">~${esc(d.total_tokens)} токенов</span>
+      ${d.pinned ? '<span class="chip pin">PIN</span>' : ''}
+    </div>`;
+    let bodyContent = '';
+    if (d.filetype === 'markdown' || d.filetype === 'md') {
+      bodyContent = `<div class="rendered-markdown">${marked.parse(d.content)}</div>`;
+    } else if (d.filetype === 'code' || d.filetype === 'py' || d.filetype === 'js' || d.filetype === 'ts') {
+      bodyContent = `<pre><code class="plain-text">${esc(d.content)}</code></pre>`;
+    } else {
+      bodyContent = `<div class="plain-text">${esc(d.content)}</div>`;
+    }
+    let chunksHtml = '<div class="chunk-list"><h3 style="margin-bottom:12px;font-size:14px;">Чанки:</h3>';
+    for (const ch of d.chunk_details) {
+      chunksHtml += `<div class="chunk-item"><div class="chunk-label">Чанк #${ch.index} • ${ch.token_count} токенов • ${ch.full_length} символов</div><div class="chunk-preview">${esc(ch.content_preview)}${ch.full_length > 300 ? '...' : ''}</div></div>`;
+    }
+    chunksHtml += '</div>';
+    $('previewBody').innerHTML = meta + bodyContent + chunksHtml;
+    $('previewModal').classList.add('open');
+  } catch (err) {
+    toast('Не удалось загрузить превью: ' + err.message, 'error');
+  }
+}
+function closePreview() { $('previewModal').classList.remove('open'); }
+$('previewModal').addEventListener('click', e => { if (e.target === $('previewModal')) closePreview(); });
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePreview(); });
+
+/* Theme toggle */
+function toggleTheme() {
+  const current = localStorage.getItem('am-theme') || 'light';
+  const next = current === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+}
+function applyTheme(theme) {
+  document.documentElement.setAttribute('data-theme', theme);
+  localStorage.setItem('am-theme', theme);
+  const isDark = theme === 'dark';
+  $('themeIcon').textContent = isDark ? '☀️' : '🌙';
+  $('themeLabel').textContent = isDark ? 'Светлая тема' : 'Тёмная тема';
+  if (window._chartInstances) {
+    Object.values(window._chartInstances).forEach(c => {
+      if (c.options) {
+        c.options.scales.x.ticks.color = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim();
+        c.options.scales.y.ticks.color = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim();
+        c.options.plugins.legend.labels.color = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim();
+        c.update('none');
+      }
+    });
+  }
+}
+applyTheme(localStorage.getItem('am-theme') || 'light');
+
+/* Charts */
+window._chartInstances = {};
+async function loadCharts() {
+  try {
+    const stats = await api('/api/stats');
+    $('chartMetrics').innerHTML = [
+      metric('Документы', stats.documents, 'всего'),
+      metric('Токены', stats.tokens.toLocaleString(), 'общий объём'),
+      metric('Категории', Object.keys(stats.categories || {}).length, 'уникальных'),
+      metric('Закреплено', stats.pinned, 'в контексте')
+    ].join('');
+
+    const activity = await api('/api/activity');
+    const textColor = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim();
+    const gridColor = getComputedStyle(document.documentElement).getPropertyValue('--line').trim();
+    const brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim();
+
+    const chartOpts = (title) => ({
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: title === undefined, labels: { color: textColor, font: { weight: 600 } } } },
+      scales: {
+        x: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
+        y: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor }, beginAtZero: true }
+      }
+    });
+
+    if (window._chartInstances.activity) window._chartInstances.activity.destroy();
+    window._chartInstances.activity = new Chart($('chartActivity'), {
+      type: 'line',
+      data: {
+        labels: activity.daily.map(d => d.date.slice(5)),
+        datasets: [{
+          label: 'Документы',
+          data: activity.daily.map(d => d.count),
+          borderColor: brandColor, backgroundColor: brandColor + '22',
+          fill: true, tension: 0.3, pointRadius: 3
+        }]
+      },
+      options: { ...chartOpts(), plugins: { legend: { display: false } } }
+    });
+
+    if (window._chartInstances.categories) window._chartInstances.categories.destroy();
+    const catColors = ['#10b981','#06b6d4','#8b5cf6','#f59e0b','#ef4444','#ec4899','#3b82f6','#84cc16'];
+    window._chartInstances.categories = new Chart($('chartCategories'), {
+      type: 'doughnut',
+      data: {
+        labels: activity.categories.map(c => c.name),
+        datasets: [{ data: activity.categories.map(c => c.count), backgroundColor: catColors, borderWidth: 0 }]
+      },
+      options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: textColor, font: { weight: 600 }, padding: 12 } } } }
+    });
+
+    if (window._chartInstances.importance) window._chartInstances.importance.destroy();
+    const impLabels = {1:'Critical',2:'High',3:'Normal',4:'Low',5:'Archive'};
+    const impColors = ['#ef4444','#f59e0b','#10b981','#3b82f6','#9ca3af'];
+    window._chartInstances.importance = new Chart($('chartImportance'), {
+      type: 'bar',
+      data: {
+        labels: activity.importance.map(i => impLabels[i.level] || i.level),
+        datasets: [{ data: activity.importance.map(i => i.count), backgroundColor: activity.importance.map((_,i) => impColors[i.level-1] || '#9ca3af'), borderRadius: 6, barPercentage: 0.6 }]
+      },
+      options: chartOpts()
+    });
+
+    if (window._chartInstances.filetypes) window._chartInstances.filetypes.destroy();
+    window._chartInstances.filetypes = new Chart($('chartFiletypes'), {
+      type: 'bar',
+      data: {
+        labels: activity.filetypes.map(f => f.type),
+        datasets: [{ data: activity.filetypes.map(f => f.count), backgroundColor: catColors.slice(0, activity.filetypes.length), borderRadius: 6, barPercentage: 0.6 }]
+      },
+      options: { ...chartOpts(), indexAxis: 'y', scales: { x: { ticks: { color: textColor }, grid: { color: gridColor }, beginAtZero: true }, y: { ticks: { color: textColor, font: { weight: 600 } }, grid: { display: false } } } }
+    });
+  } catch (err) {
+    toast('Ошибка загрузки графиков: ' + err.message, 'error');
+  }
+}
+
+/* Context */
+async function loadContext() {
+  const d = await api('/api/context');
+  const items = d.items || [];
+  $('ctx').textContent = items.length ? items.map(x =>
+    `[${x.category} | importance ${x.importance}${x.pinned ? ' | pinned' : ''}] ${x.title}\n${x.content}`
+  ).join('\n\n') : 'Критичный контекст пока пуст';
+}
+
 async function patchDoc(id, pinned, importance) {
   let url = `/api/documents/${id}?`;
   if (pinned !== null) url += `pinned=${pinned}`;
@@ -580,13 +928,6 @@ async function delDoc(id) {
   if (!confirm('Удалить запись памяти?')) return;
   await api('/api/documents/' + id, {method:'DELETE'});
   refreshAll();
-}
-async function loadContext() {
-  const d = await api('/api/context');
-  const items = d.items || [];
-  $('ctx').textContent = items.length ? items.map(x =>
-    `[${x.category} | importance ${x.importance}${x.pinned ? ' | pinned' : ''}] ${x.title}\n${x.content}`
-  ).join('\n\n') : 'Критичный контекст пока пуст';
 }
 async function refreshAll() {
   await loadStats();
