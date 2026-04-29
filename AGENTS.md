@@ -54,6 +54,9 @@ ActiveMemory — память контекста и хранилище знан�
 | `AM_USE_REDIS` | true | Включить Redis кэш эмбеддингов |
 | `AM_REDIS_URL` | redis://localhost:6379/0 | Redis URL |
 | `AM_CACHE_TTL` | 3600 | TTL кэша секунды |
+| `AM_REQUIRE_AUTH` | false | Включить auth middleware для write-операций |
+| `AM_ENCRYPTION_KEY` | active_memory_default_key_change_me | Мастер-ключ для Fernet шифрования |
+| `AM_ACCESS_LOG_RETENTION` | 30 | Дней хранения access_log |
 
 ## MCP Tools (14 штук)
 
@@ -72,23 +75,28 @@ ActiveMemory — память контекста и хранилище знан�
 - `get_context(max_tokens, pinned, important)` — авто-сбор важного контекста
 - `reindex_embeddings(document_id)` — пересчёт эмбеддингов
 
-## Web Dashboard (Phase 4)
+## Web Dashboard (Phase 4-5)
 
 Дашборд включает:
 - **Тёмная/светлая тема** — CSS переменные, toggle в sidebar, localStorage
 - **Drag-n-drop загрузка** — multi-file upload с прогресс-баром через XHR
 - **Preview документов** — модальное окно с markdown рендером (marked.js)
 - **Графики** — Chart.js: активность, категории, важность, типы файлов
+- **Безопасность** — управление API токенами, просмотр access log
 - **Новые API:** `GET /api/documents/{id}/content`, `GET /api/activity`
+- **Security API:** `GET/POST/PATCH/DELETE /api/tokens`, `GET/DELETE /api/access-log`
+- **Encryption:** `POST /api/documents/{id}/encrypt`, `POST /api/documents/{id}/decrypt`
 
 ## Известные ограничения
 
-**Решено (Phase 1-3):**
+**Решено (Phase 1-5):**
 1. ~~pgvector Vector тип~~ — интегрирован, HNSW индекс настроен
 2. ~~PostgreSQL FTS~~ — tsvector + GIN индекс + auto-update trigger
 3. ~~Redis cache~~ — подключён с in-memory fallback
 4. ~~MemoryCache мёртвый код~~ — удалён
 5. ~~N-gram fallback~~ — character-level n-gram hash, семантическая близость
+6. ~~Нет auth~~ — API токены с scopes, middleware, access log
+7. ~~Нет шифрования~~ — Fernet для чанков и embeddings
 
 **Остаётся:**
 - SQLite fallback не поддерживает Vector/FTS (cosine similarity в Python + ilike)

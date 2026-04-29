@@ -66,16 +66,32 @@ bar chart распределения важности, horizontal bar chart ти
 
 ---
 
-## Phase 5 — Безопасность
+## Phase 5 — Безопасность ✅ ЗАВЕРШЁН
 
-### 5.1 API токены
-Генерация через дашборд, хеширование в БД, scopes (read/write/admin).
+### 5.1 API токены ✅
+Генерация через `POST /api/tokens?label=NAME&scopes=SCOPE&days=N`.
+Хеширование SHA-256 в БД (raw токен не хранится). Scopes: read/write/admin
+с иерархией (admin покрывает всё). Токены с префиксом `am_`.
+CRUD: list, create, patch (revoke/update scopes), delete.
 
-### 5.2 Шифрование эмбеддингов
-Для чувствительных документов.
+### 5.2 Шифрование эмбеддингов ✅
+Fernet (cryptography) для шифрования чанков и embeddings чувствительных документов.
+Endpoints: `POST /api/documents/{id}/encrypt` и `/decrypt`.
+Document модель: `encrypted` (bool) + `encryption_salt` (str).
+Embedding модель: `encrypted_embedding` (Text) для хранения зашифрованного вектора.
+Мастер-ключ через `AM_ENCRYPTION_KEY` env var.
 
-### 5.3 Логирование доступа
-Таблица access_log с timestamp, user, action, document_id, ip.
+### 5.3 Логирование доступа ✅
+Таблица `access_log`: timestamp, action, token_label, document_id, ip_address,
+user_agent, details (JSON), success. Endpoint `GET /api/access-log` с фильтрами.
+Middleware автоматически логирует все write-запросы.
+`DELETE /api/access-log?older_than_days=N` для очистки.
+
+### 5.4 Auth middleware ✅
+HTTP middleware проверяет `Authorization: Bearer am_...` для write-операций
+когда `AM_REQUIRE_AUTH=true`. Валидация scope, expiration, active status.
+Auto-генерация admin токена при первом запуске с auth.
+Read-endpoints доступны без токена (статистика, поиск, документы).
 
 ---
 

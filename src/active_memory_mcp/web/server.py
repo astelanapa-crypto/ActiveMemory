@@ -1,20 +1,31 @@
 """Web dashboard for managing agent memory and context."""
 
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta
 import os
 import tempfile
+import time
+from functools import wraps
 
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import desc, func, or_
 
 from ..core.config import config
+from ..core.auth import (
+    generate_token, hash_token, validate_scopes,
+    create_encryption_salt, encrypt_embedding, decrypt_embedding, get_encryption_key,
+    VALID_SCOPES,
+)
 from ..ingest.chunker import Chunker
 from ..ingest.processor import DocumentProcessor
 from ..search.embedder import Embedder
 from ..search.searcher import HybridSearcher
-from ..storage.db import Chunk, Document, Embedding, get_backend, get_session, init_db
+from ..storage.db import (
+    AccessLog, ApiToken, Chunk, Document, Embedding, Vector,
+    get_backend, get_session, init_db,
+)
 
 
 processor = DocumentProcessor()
@@ -22,10 +33,88 @@ chunker = Chunker()
 embedder = Embedder()
 searcher = HybridSearcher()
 
+import logging
+logger = logging.getLogger(__name__)
+
+_ENCRYPTION_KEY = None
+
+
+def _get_encryption_key():
+    global _ENCRYPTION_KEY
+    if _ENCRYPTION_KEY is None:
+        master = os.getenv("AM_ENCRYPTION_KEY", "active_memory_default_key_change_me")
+        _ENCRYPTION_KEY = get_encryption_key(master)
+    return _ENCRYPTION_KEY
+
+
+_SKIP_AUTH_PATHS = {"/", "/health", "/api/stats", "/api/documents", "/api/context",
+                    "/api/search", "/api/activity", "/api/documents"}
+
+
+def _should_skip_auth(path: str) -> bool:
+    for skip in _SKIP_AUTH_PATHS:
+        if path == skip or path.startswith(skip + "/") and not path.startswith("/api/tokens"):
+            return True
+    return False
+
+
+def _log_access(action: str, token_label: str | None = None, document_id: int | None = None,
+                ip: str | None = None, success: bool = True, details: dict | None = None):
+    try:
+        session = get_session()
+        try:
+            log = AccessLog(
+                action=action, token_label=token_label, document_id=document_id,
+                ip_address=ip, success=success, details=details or {},
+            )
+            session.add(log)
+            session.commit()
+        finally:
+            session.close()
+    except Exception:
+        pass
+
+
+def _extract_client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
+def _get_token_label_from_request(request: Request) -> str | None:
+    auth = request.headers.get("authorization", "")
+    if auth.startswith("Bearer "):
+        raw_token = auth[7:]
+        token_hash = hash_token(raw_token)
+        session = get_session()
+        try:
+            token = session.query(ApiToken).filter(ApiToken.token_hash == token_hash).first()
+            return token.label if token else None
+        finally:
+            session.close()
+    return None
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
+    if config.security.require_auth:
+        session = get_session()
+        try:
+            has_admin = session.query(func.count(ApiToken.id)).filter(
+                ApiToken.active.is_(True), ApiToken.scopes.like("%admin%")
+            ).scalar()
+            if not has_admin:
+                raw, token_hash = generate_token()
+                session.add(ApiToken(
+                    token_hash=token_hash, label="admin-auto-generated",
+                    scopes="admin", active=True, created_by="system",
+                ))
+                session.commit()
+                logger.info(f"Auto-generated admin token: {raw}")
+        finally:
+            session.close()
     yield
 
 
@@ -37,6 +126,52 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+_WRITE_ACTIONS = {"POST", "PUT", "DELETE", "PATCH"}
+_AUTH_REQUIRED_PATHS = {"/api/memory", "/api/upload", "/api/tokens", "/api/access-log"}
+
+
+@app.middleware("http")
+async def auth_and_logging_middleware(request: Request, call_next):
+    ip = _extract_client_ip(request)
+    action_name = f"{request.method.lower()}_{request.url.path.strip('/').replace('/', '_')}"
+    token_label = None
+
+    if config.security.require_auth and request.method in _WRITE_ACTIONS:
+        needs_auth = any(request.url.path.startswith(p) for p in _AUTH_REQUIRED_PATHS)
+        if needs_auth:
+            auth = request.headers.get("authorization", "")
+            if not auth.startswith("Bearer "):
+                return JSONResponse(status_code=401, content={"error": "Authorization required"})
+            raw_token = auth[7:]
+            token_hash_val = hash_token(raw_token)
+            session = get_session()
+            try:
+                token = session.query(ApiToken).filter(
+                    ApiToken.token_hash == token_hash_val,
+                    ApiToken.active.is_(True),
+                ).first()
+                if not token:
+                    _log_access("auth_failed", ip=ip, success=False, details={"action": action_name})
+                    return JSONResponse(status_code=401, content={"error": "Invalid or inactive token"})
+                from datetime import datetime as _dt
+                if token.expires_at and token.expires_at < _dt.utcnow():
+                    _log_access("auth_expired", token_label=token.label, ip=ip, success=False)
+                    return JSONResponse(status_code=401, content={"error": "Token expired"})
+                token_label = token.label
+                token.last_used_at = datetime.utcnow()
+                session.commit()
+            finally:
+                session.close()
+
+    response = await call_next(request)
+
+    if config.security.require_auth or request.method in _WRITE_ACTIONS:
+        if not config.security.require_auth and request.method in _WRITE_ACTIONS:
+            _log_access(action_name, token_label=None, ip=ip, success=response.status_code < 400)
+
+    return response
 
 
 def _document_payload(doc: Document, preview: str = "") -> dict:
@@ -129,7 +264,8 @@ async def health():
 
 
 @app.get("/api/stats")
-async def stats():
+async def stats(request: Request):
+    _log_access("stats_read", token_label=_get_token_label_from_request(request), ip=_extract_client_ip(request))
     session = get_session()
     try:
         documents = session.query(func.count(Document.id)).scalar() or 0
@@ -218,6 +354,7 @@ async def context(limit: int = Query(12, ge=1, le=50)):
 
 @app.post("/api/memory")
 async def store_memory(
+    request: Request,
     content: str = Form(...),
     title: str = Form("Manual memory"),
     category: str = Form("agent"),
@@ -226,18 +363,28 @@ async def store_memory(
     tags: str = Form(""),
     source: str = Form("dashboard"),
 ):
-    result = _store_text_memory(content, title, category, importance, pinned, tags, source)
-    return {"status": "stored", **result}
+    token_label = _get_token_label_from_request(request)
+    ip = _extract_client_ip(request)
+    try:
+        result = _store_text_memory(content, title, category, importance, pinned, tags, source)
+        _log_access("store_memory", token_label=token_label, document_id=result["id"], ip=ip)
+        return {"status": "stored", **result}
+    except Exception as e:
+        _log_access("store_memory", token_label=token_label, ip=ip, success=False, details={"error": str(e)})
+        raise
 
 
 @app.post("/api/upload")
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     category: str = Form("knowledge"),
     importance: int = Form(3),
     pinned: bool = Form(False),
     tags: str = Form(""),
 ):
+    token_label = _get_token_label_from_request(request)
+    ip = _extract_client_ip(request)
     suffix = os.path.splitext(file.filename or "")[1]
     with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
         tmp.write(await file.read())
@@ -255,6 +402,7 @@ async def upload_document(
                 "source": "upload",
             },
         )
+        _log_access("upload", token_label=token_label, ip=ip, details={"filename": file.filename})
         return result
     finally:
         try:
@@ -265,11 +413,14 @@ async def upload_document(
 
 @app.get("/api/search")
 async def search(
+    request: Request,
     q: str = Query(..., min_length=1),
     k: int = Query(8, ge=1, le=30),
     category: str = "",
     filetype: str = "",
 ):
+    token_label = _get_token_label_from_request(request)
+    _log_access("search", token_label=token_label, ip=_extract_client_ip(request), details={"query": q[:100]})
     filters = {}
     if category:
         filters["category"] = category
@@ -281,15 +432,18 @@ async def search(
 
 @app.patch("/api/documents/{document_id}")
 async def update_document(
+    request: Request,
     document_id: int,
     pinned: bool | None = None,
     importance: int | None = Query(None, ge=1, le=5),
     category: str | None = None,
 ):
+    token_label = _get_token_label_from_request(request)
     session = get_session()
     try:
         doc = session.query(Document).filter(Document.id == document_id).first()
         if not doc:
+            _log_access("update_document", token_label=token_label, document_id=document_id, success=False, details={"error": "not found"})
             raise HTTPException(status_code=404, detail="Document not found")
         if pinned is not None:
             doc.pinned = pinned
@@ -298,20 +452,24 @@ async def update_document(
         if category is not None:
             doc.category = category
         session.commit()
+        _log_access("update_document", token_label=token_label, document_id=document_id)
         return {"updated": True}
     finally:
         session.close()
 
 
 @app.delete("/api/documents/{document_id}")
-async def delete_document(document_id: int):
+async def delete_document(request: Request, document_id: int):
+    token_label = _get_token_label_from_request(request)
     session = get_session()
     try:
         doc = session.query(Document).filter(Document.id == document_id).first()
         if not doc:
+            _log_access("delete_document", token_label=token_label, document_id=document_id, success=False, details={"error": "not found"})
             raise HTTPException(status_code=404, detail="Document not found")
         session.delete(doc)
         session.commit()
+        _log_access("delete_document", token_label=token_label, document_id=document_id)
         return {"deleted": True}
     finally:
         session.close()
@@ -344,6 +502,7 @@ async def get_document_content(document_id: int):
             "category": doc.category,
             "importance": doc.importance,
             "pinned": doc.pinned,
+            "encrypted": doc.encrypted,
             "chunks_count": len(chunks),
             "total_tokens": sum(c.token_count for c in chunks),
             "content": full_content,
@@ -423,6 +582,244 @@ async def get_activity_data():
             "importance": importance_chart,
             "filetypes": filetype_chart,
         }
+    finally:
+        session.close()
+
+
+# ============== SECURITY API ==============
+
+@app.get("/api/tokens")
+async def list_tokens(request: Request):
+    _log_access("token_list", token_label=_get_token_label_from_request(request), ip=_extract_client_ip(request))
+    session = get_session()
+    try:
+        tokens = session.query(ApiToken).order_by(desc(ApiToken.created_at)).all()
+        return {
+            "items": [
+                {
+                    "id": t.id,
+                    "label": t.label,
+                    "scopes": t.scopes,
+                    "active": t.active,
+                    "created_at": t.created_at.isoformat() if t.created_at else None,
+                    "expires_at": t.expires_at.isoformat() if t.expires_at else None,
+                    "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+                    "created_by": t.created_by,
+                }
+                for t in tokens
+            ]
+        }
+    finally:
+        session.close()
+
+
+@app.post("/api/tokens")
+async def create_token(request: Request):
+    ip = _extract_client_ip(request)
+    _log_access("token_create", ip=ip, details={"ip": ip})
+    label = request.query_params.get("label", "unnamed-token")
+    scopes = request.query_params.get("scopes", "read")
+    days = request.query_params.get("days", None)
+    if days:
+        from datetime import timedelta
+        expires_at = datetime.utcnow() + timedelta(days=int(days))
+    else:
+        expires_at = None
+    scopes_list = {s.strip() for s in scopes.split(",")}
+    invalid = scopes_list - VALID_SCOPES
+    if invalid:
+        raise HTTPException(status_code=400, detail=f"Invalid scopes: {invalid}")
+    raw_token, token_hash = generate_token()
+    session = get_session()
+    try:
+        token = ApiToken(
+            token_hash=token_hash,
+            label=label,
+            scopes=",".join(sorted(scopes_list)),
+            active=True,
+            expires_at=expires_at,
+            created_by=_get_token_label_from_request(request) or "dashboard",
+        )
+        session.add(token)
+        session.commit()
+        _log_access("token_create", token_label=label, success=True, details={"scopes": token.scopes})
+        return {
+            "token": raw_token,
+            "label": token.label,
+            "scopes": token.scopes,
+            "expires_at": token.expires_at.isoformat() if token.expires_at else None,
+            "warning": "Save this token now — it will not be shown again",
+        }
+    finally:
+        session.close()
+
+
+@app.patch("/api/tokens/{token_id}")
+async def update_token(token_id: int, request: Request):
+    _log_access("token_update", token_label=_get_token_label_from_request(request), ip=_extract_client_ip(request))
+    session = get_session()
+    try:
+        token = session.query(ApiToken).filter(ApiToken.id == token_id).first()
+        if not token:
+            raise HTTPException(status_code=404, detail="Token not found")
+        body = await request.json()
+        if "active" in body:
+            token.active = bool(body["active"])
+        if "label" in body:
+            token.label = body["label"]
+        if "scopes" in body:
+            scopes_list = {s.strip() for s in body["scopes"].split(",")}
+            invalid = scopes_list - VALID_SCOPES
+            if invalid:
+                raise HTTPException(status_code=400, detail=f"Invalid scopes: {invalid}")
+            token.scopes = ",".join(sorted(scopes_list))
+        session.commit()
+        return {"updated": True}
+    finally:
+        session.close()
+
+
+@app.delete("/api/tokens/{token_id}")
+async def delete_token(token_id: int, request: Request):
+    label = _get_token_label_from_request(request)
+    _log_access("token_delete", token_label=label, ip=_extract_client_ip(request))
+    session = get_session()
+    try:
+        token = session.query(ApiToken).filter(ApiToken.id == token_id).first()
+        if not token:
+            raise HTTPException(status_code=404, detail="Token not found")
+        session.delete(token)
+        session.commit()
+        return {"deleted": True}
+    finally:
+        session.close()
+
+
+@app.get("/api/access-log")
+async def get_access_log(
+    limit: int = Query(100, ge=1, le=500),
+    action: str = "",
+    success: bool | None = None,
+):
+    session = get_session()
+    try:
+        query = session.query(AccessLog).order_by(desc(AccessLog.timestamp))
+        if action:
+            query = query.filter(AccessLog.action == action)
+        if success is not None:
+            query = query.filter(AccessLog.success == success)
+        logs = query.limit(limit).all()
+        return {
+            "items": [
+                {
+                    "id": l.id,
+                    "timestamp": l.timestamp.isoformat() if l.timestamp else None,
+                    "action": l.action,
+                    "token_label": l.token_label,
+                    "document_id": l.document_id,
+                    "ip_address": l.ip_address,
+                    "success": l.success,
+                    "details": l.details or {},
+                }
+                for l in logs
+            ],
+            "count": len(logs),
+        }
+    finally:
+        session.close()
+
+
+@app.delete("/api/access-log")
+async def clear_access_log(request: Request):
+    _log_access("log_clear", token_label=_get_token_label_from_request(request), ip=_extract_client_ip(request))
+    older_than_days = int(request.query_params.get("older_than_days", 0))
+    session = get_session()
+    try:
+        if older_than_days > 0:
+            from datetime import timedelta
+            cutoff = datetime.utcnow() - timedelta(days=older_than_days)
+            deleted = session.query(AccessLog).filter(AccessLog.timestamp < cutoff).delete()
+        else:
+            deleted = session.query(AccessLog).delete()
+        session.commit()
+        return {"deleted": deleted}
+    finally:
+        session.close()
+
+
+@app.post("/api/documents/{document_id}/encrypt")
+async def encrypt_document(document_id: int, request: Request):
+    _log_access("document_encrypt", token_label=_get_token_label_from_request(request), document_id=document_id, ip=_extract_client_ip(request))
+    session = get_session()
+    try:
+        doc = session.query(Document).filter(Document.id == document_id).first()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        if doc.encrypted:
+            return {"encrypted": True, "warning": "Already encrypted"}
+        from cryptography.fernet import Fernet
+        key = _get_encryption_key()
+        f = Fernet(key)
+        salt = create_encryption_salt()
+        for chunk in doc.chunks:
+            content_bytes = chunk.content.encode("utf-8")
+            encrypted = f.encrypt(content_bytes).decode()
+            chunk.content = encrypted
+            emb = session.query(Embedding).filter(Embedding.chunk_id == chunk.id).first()
+            if emb and emb.embedding is not None:
+                import json
+                if hasattr(emb.embedding, 'tolist'):
+                    emb_vec = emb.embedding.tolist()
+                elif isinstance(emb.embedding, str):
+                    emb_vec = json.loads(emb.embedding)
+                else:
+                    emb_vec = list(emb.embedding)
+                emb.encrypted_embedding = encrypt_embedding(json.dumps(emb_vec).encode(), key)
+                if not Vector:
+                    emb.embedding = None
+        doc.encrypted = True
+        doc.encryption_salt = salt
+        session.commit()
+        return {"encrypted": True, "document_id": document_id}
+    finally:
+        session.close()
+
+
+@app.post("/api/documents/{document_id}/decrypt")
+async def decrypt_document(document_id: int, request: Request):
+    _log_access("document_decrypt", token_label=_get_token_label_from_request(request), document_id=document_id, ip=_extract_client_ip(request))
+    session = get_session()
+    try:
+        doc = session.query(Document).filter(Document.id == document_id).first()
+        if not doc:
+            raise HTTPException(status_code=404, detail="Document not found")
+        if not doc.encrypted:
+            return {"decrypted": True, "warning": "Not encrypted"}
+        from cryptography.fernet import Fernet
+        key = _get_encryption_key()
+        f = Fernet(key)
+        for chunk in doc.chunks:
+            try:
+                chunk.content = f.decrypt(chunk.content.encode()).decode()
+            except Exception:
+                pass
+            emb = session.query(Embedding).filter(Embedding.chunk_id == chunk.id).first()
+            if emb and emb.encrypted_embedding:
+                try:
+                    import json
+                    decrypted_bytes = decrypt_embedding(emb.encrypted_embedding, key)
+                    emb_vec = json.loads(decrypted_bytes)
+                    if Vector:
+                        emb.embedding = emb_vec
+                    else:
+                        emb.embedding = json.dumps(emb_vec)
+                    emb.encrypted_embedding = None
+                except Exception:
+                    pass
+        doc.encrypted = False
+        doc.encryption_salt = None
+        session.commit()
+        return {"decrypted": True, "document_id": document_id}
     finally:
         session.close()
 
@@ -510,6 +907,7 @@ button,input,select,textarea{font:inherit;letter-spacing:0}button{cursor:pointer
       <button data-view="ingest"><span class="ico">03</span><span>Запись</span></button>
       <button data-view="context"><span class="ico">04</span><span>Контекст</span></button>
       <button data-view="charts"><span class="ico">05</span><span>Графики</span></button>
+      <button data-view="security"><span class="ico">06</span><span>Безопасность</span></button>
     </nav>
     <button class="theme-toggle" onclick="toggleTheme()">
       <span class="icon" id="themeIcon">🌙</span>
@@ -607,6 +1005,34 @@ button,input,select,textarea{font:inherit;letter-spacing:0}button{cursor:pointer
         <div class="chart-card"><h3>Типы файлов</h3><div class="chart-canvas-wrap"><canvas id="chartFiletypes"></canvas></div></div>
       </div>
     </section>
+
+    <section id="security" class="view">
+      <div class="layout">
+        <div class="panel">
+          <div class="panel-head"><div><h2>API токены</h2><p>Управление доступом к ActiveMemory API.</p></div></div>
+          <div class="field"><span>Имя токена</span><input id="newTokenLabel" placeholder="my-app"></div>
+          <div class="split">
+            <label class="field"><span>Scope</span><select id="newTokenScopes"><option value="read">read</option><option value="write">write</option><option value="read,write">read+write</option><option value="admin">admin</option></select></label>
+            <label class="field"><span>Дней (0 = ∞)</span><input id="newTokenDays" type="number" value="0" min="0"></label>
+          </div>
+          <button class="btn primary" onclick="createToken()">Создать токен</button>
+          <div class="field" id="newTokenResultWrap" style="display:none;margin-top:12px">
+            <span>Токен (сохраните сейчас!)</span>
+            <input id="newTokenResult" readonly onclick="this.select()">
+          </div>
+          <div class="list" id="tokenList" style="margin-top:16px"></div>
+        </div>
+        <div class="panel">
+          <div class="panel-head">
+            <div><h2>Лог доступа</h2><p>Аудит всех запросов к API.</p></div>
+            <button class="btn danger slim" onclick="clearLog()">Очистить</button>
+          </div>
+          <div style="overflow-x:auto">
+            <table class="log-table" id="logTable"></table>
+          </div>
+        </div>
+      </div>
+    </section>
   </main>
 </div>
 
@@ -643,6 +1069,7 @@ function switchView(name) {
   document.querySelector(`[data-view="${name}"]`)?.classList.add('active');
   $(name).classList.add('active');
   if (name === 'charts') loadCharts();
+  if (name === 'security') { loadTokens(); loadAccessLog(); }
 }
 function quickFocus() {
   switchView('search');
@@ -831,6 +1258,7 @@ function applyTheme(theme) {
 applyTheme(localStorage.getItem('am-theme') || 'light');
 
 /* Charts */
+.log-table{width:100%;border-collapse:collapse;font-size:12px}.log-table th{text-align:left;padding:6px 8px;border-bottom:2px solid var(--line-strong);color:var(--muted);font-weight:700;text-transform:uppercase;font-size:11px}.log-table td{padding:5px 8px;border-bottom:1px solid var(--line)}.log-table code{background:var(--code-bg);padding:1px 4px;border-radius:3px;font-size:11px}.token-row{border:1px solid var(--line);background:var(--surface-2);border-radius:var(--radius);padding:11px;display:grid;gap:8px}.token-meta{display:flex;gap:16px;font-size:11px;color:var(--muted)}.chip-inactive{color:#999;background:#eee;border-color:#ccc}
 window._chartInstances = {};
 async function loadCharts() {
   try {
@@ -906,6 +1334,77 @@ async function loadCharts() {
   } catch (err) {
     toast('Ошибка загрузки графиков: ' + err.message, 'error');
   }
+}
+
+/* Security — Tokens */
+async function loadTokens() {
+  const d = await api('/api/tokens');
+  const items = d.items || [];
+  $('tokenList').innerHTML = items.length ? items.map(t => `
+    <article class="token-row">
+      <div class="row-top">
+        <h3>${esc(t.label)}</h3>
+        <div class="chips">
+          <span class="chip ${t.active ? '' : 'chip-inactive'}">${t.active ? 'active' : 'revoked'}</span>
+          <span class="chip">${esc(t.scopes)}</span>
+        </div>
+      </div>
+      <div class="token-meta">
+        <span>Создан: ${esc(t.created_at?.slice(0,10) || '—')}</span>
+        <span>Истёк: ${esc(t.expires_at?.slice(0,10) || '∞')}</span>
+        <span>Последнее: ${esc(t.last_used_at?.slice(0,16) || '—')}</span>
+      </div>
+      <div class="row-actions">
+        ${t.active ? `<button class="btn slim danger" onclick="revokeToken(${t.id})">Отозвать</button>` : ''}
+        <button class="btn slim danger" onclick="deleteToken(${t.id})">Удалить</button>
+      </div>
+    </article>
+  `).join('') : '<div class="empty">Нет токенов. Создайте первый.</div>';
+}
+async function createToken() {
+  const label = $('newTokenLabel').value.trim();
+  const scopes = $('newTokenScopes').value;
+  const days = $('newTokenDays').value;
+  if (!label) return toast('Введите имя токена', 'error');
+  let url = `/api/tokens?label=${encodeURIComponent(label)}&scopes=${encodeURIComponent(scopes)}`;
+  if (days) url += `&days=${encodeURIComponent(days)}`;
+  const d = await api(url, {method:'POST'});
+  $('newTokenLabel').value = '';
+  if (d.token) {
+    $('newTokenResult').value = d.token;
+    $('newTokenResultWrap').style.display = '';
+    toast('Токен создан — сохраните его!');
+  }
+  loadTokens();
+}
+async function revokeToken(id) {
+  await api(`/api/tokens/${id}`, {method:'PATCH', body:JSON.stringify({active:false}), headers:{'Content-Type':'application/json'}});
+  toast('Токен отозван'); loadTokens();
+}
+async function deleteToken(id) {
+  if (!confirm('Удалить токен?')) return;
+  await api(`/api/tokens/${id}`, {method:'DELETE'});
+  toast('Токен удалён'); loadTokens();
+}
+
+/* Security — Access Log */
+async function loadAccessLog() {
+  const d = await api('/api/access-log?limit=200');
+  const items = d.items || [];
+  $('logTable').innerHTML = items.length ? items.map(l => `
+    <tr>
+      <td>${esc(l.timestamp?.slice(0,19) || '—')}</td>
+      <td><code>${esc(l.action)}</code></td>
+      <td>${esc(l.token_label || '—')}</td>
+      <td>${esc(l.ip_address || '—')}</td>
+      <td>${l.success ? '<span class="chip" style="color:var(--ok)">✓</span>' : '<span class="chip" style="color:var(--danger)">✗</span>'}</td>
+    </tr>
+  `).join('') : '<tr><td colspan="5" class="empty">Нет записей</td></tr>';
+}
+async function clearLog() {
+  if (!confirm('Очистить весь лог доступа?')) return;
+  await api('/api/access-log', {method:'DELETE'});
+  toast('Лог очищен'); loadAccessLog();
 }
 
 /* Context */

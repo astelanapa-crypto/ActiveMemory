@@ -73,6 +73,14 @@ class CacheConfig:
 
 
 @dataclass
+class SecurityConfig:
+    """Security configuration."""
+    require_auth: bool = os.getenv("AM_REQUIRE_AUTH", "false").lower() == "true"
+    encryption_key: str = os.getenv("AM_ENCRYPTION_KEY", "active_memory_default_key_change_me")
+    access_log_retention_days: int = int(os.getenv("AM_ACCESS_LOG_RETENTION", "30"))
+
+
+@dataclass
 class WebConfig:
     """Web dashboard configuration."""
     host: str = os.getenv("AM_WEB_HOST", "0.0.0.0")
@@ -90,6 +98,7 @@ class Config:
         self.search = SearchConfig()
         self.cache = CacheConfig()
         self.web = WebConfig()
+        self.security = SecurityConfig()
 
     @property
     def database_url(self) -> str:

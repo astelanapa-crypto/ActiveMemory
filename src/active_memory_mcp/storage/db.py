@@ -40,6 +40,8 @@ class Document(Base):
     source = Column(String(200), default="manual")
     importance = Column(Integer, default=3)
     pinned = Column(Boolean, default=False)
+    encrypted = Column(Boolean, default=False)
+    encryption_salt = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     metadata_ = Column(JSON, default=dict)
@@ -50,6 +52,7 @@ class Document(Base):
         Index("ix_documents_filename", "filename"),
         Index("ix_documents_filetype", "filetype"),
         Index("ix_documents_created_at", "created_at"),
+        Index("ix_documents_encrypted", "encrypted"),
     )
 
 
@@ -86,6 +89,7 @@ class Embedding(Base):
 
     chunk_id = Column(Integer, ForeignKey("chunks.id", ondelete="CASCADE"), primary_key=True)
     embedding = Column(Vector(config.embedding.dimensions), nullable=True) if Vector else Column(Text, nullable=True)
+    encrypted_embedding = Column(Text, nullable=True)  # Fernet-encrypted embedding for sensitive docs
     model = Column(String(200), default="bge-m3")
     dimensions = Column(Integer, default=1024)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -97,6 +101,49 @@ class Embedding(Base):
               postgresql_using="hnsw",
               postgresql_with={"m": 16, "ef_construction": 64},
               postgresql_ops={"embedding": "vector_cosine_ops"}),
+        Index("ix_embeddings_encrypted", "encrypted_embedding"),
+    )
+
+
+class ApiToken(Base):
+    """API token for authentication."""
+    __tablename__ = "api_tokens"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    token_hash = Column(String(128), nullable=False, unique=True)
+    label = Column(String(100), nullable=False)
+    scopes = Column(String(50), nullable=False, default="read")  # read | write | admin (comma-separated)
+    active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    expires_at = Column(DateTime, nullable=True)
+    last_used_at = Column(DateTime, nullable=True)
+    created_by = Column(String(100), default="system")
+
+    __table_args__ = (
+        Index("ix_api_tokens_hash", "token_hash"),
+        Index("ix_api_tokens_active", "active"),
+    )
+
+
+class AccessLog(Base):
+    """Access log for audit trail."""
+    __tablename__ = "access_log"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    action = Column(String(50), nullable=False)  # search, store, read, delete, update, login, token_create, etc.
+    token_label = Column(String(100), nullable=True)
+    document_id = Column(Integer, nullable=True)
+    ip_address = Column(String(45), nullable=True)  # IPv6 max length
+    user_agent = Column(String(500), nullable=True)
+    details = Column(JSON, default=dict)
+    success = Column(Boolean, default=True)
+
+    __table_args__ = (
+        Index("ix_access_log_timestamp", "timestamp"),
+        Index("ix_access_log_action", "action"),
+        Index("ix_access_log_document_id", "document_id"),
+        Index("ix_access_log_token_label", "token_label"),
     )
 
 
