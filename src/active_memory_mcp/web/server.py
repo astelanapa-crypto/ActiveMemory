@@ -455,6 +455,20 @@ async def search(
     category: str = "",
     filetype: str = "",
 ):
+    # Response contract:
+    # {
+    #   "query": str,
+    #   "results": [
+    #     {
+    #       "score": float | None,     # normalized relevance score from search backend
+    #       "content": str,            # matched chunk/document text
+    #       "filetype": str | None,    # canonical file type
+    #       "category": str | None,    # document category
+    #       "source": str | None       # data source label (manual/upload/etc.)
+    #     }
+    #   ],
+    #   "total": int
+    # }
     token_label = _get_token_label_from_request(request)
     _log_access("search", token_label=token_label, ip=_extract_client_ip(request), details={"query": q[:100]})
     filters = {}
@@ -463,7 +477,17 @@ async def search(
     if filetype:
         filters["filetype"] = filetype
     results = searcher.search(q, top_k=k, filters=filters)
-    return {"query": q, "results": [item.to_dict() for item in results], "total": len(results)}
+    normalized_results = []
+    for item in results:
+        raw = item.to_dict()
+        normalized_results.append({
+            "score": raw.get("score", raw.get("similarity")),
+            "content": raw.get("content", ""),
+            "filetype": raw.get("filetype", raw.get("type")),
+            "category": raw.get("category"),
+            "source": raw.get("source"),
+        })
+    return {"query": q, "results": normalized_results, "total": len(normalized_results)}
 
 
 @app.patch("/api/documents/{document_id}")

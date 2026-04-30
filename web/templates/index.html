@@ -496,7 +496,7 @@ async function doSearch() {
     
     let url = `/search?q=${encodeURIComponent(q)}&k=${k}`;
     if (cat) url += `&category=${cat}`;
-    if (type) url += `&type=${type}`;
+    if (type) url += `&filetype=${type}`;
     
     const results = document.getElementById('searchResults');
     results.innerHTML = '<div class="empty"><span class="spinner"></span><p>Searching...</p></div>';
@@ -507,16 +507,20 @@ async function doSearch() {
             results.innerHTML = '<div class="empty"><p>No results found for "' + q + '"</p></div>';
             return;
         }
-        results.innerHTML = d.results.map(r => `
+        results.innerHTML = d.results.map(r => {
+            const score = r.similarity ?? r.score;
+            const itemType = r.type ?? r.filetype ?? 'unknown';
+            return `
             <div class="result-card">
-                <span class="result-score">${Math.round(r.similarity * 100)}% match</span>
+                <span class="result-score">${score != null ? `${Math.round(score * 100)}% match` : 'N/A match'}</span>
                 <div class="result-content">${r.content}</div>
                 <div class="result-meta">
-                    <span class="tag tag-${r.type}">${r.type}</span>
+                    <span class="tag tag-${itemType}">${itemType}</span>
                     <span style="margin-left:0.5rem">${r.category}</span>
                 </div>
             </div>
-        `).join('');
+        `;
+        }).join('');
     } catch(e) {
         showToast('Search error: ' + e.message, 'error');
     }
