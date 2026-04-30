@@ -99,6 +99,11 @@ class TelegramConfig:
     bot_token: str = os.getenv("TG_BOT_TOKEN", "")
     admin_ids: str = os.getenv("TG_ADMIN_IDS", "")
     allowed_users: str = os.getenv("TG_ALLOWED_USERS", "")
+    max_file_size_mb: int = int(os.getenv("TG_MAX_FILE_SIZE_MB", "20"))
+    allowed_extensions: str = os.getenv(
+        "TG_ALLOWED_EXTENSIONS",
+        ".txt,.md,.pdf,.py,.js,.ts,.json,.yaml,.yml,.csv,.log,.xml,.html,.css,.sh",
+    )
 
 
 @dataclass

@@ -4,6 +4,7 @@ Provides commands: /search, /context, /list, /add, /stats.
 """
 
 import logging
+from pathlib import Path
 
 from telegram import Update
 from telegram.ext import (
@@ -21,6 +22,17 @@ CHOOSING, TYPING = range(2)
 
 # Initialize searcher
 searcher = HybridSearcher()
+
+
+def _telegram_allowed_extensions() -> set[str]:
+    """Return normalized Telegram file extension allowlist."""
+    extensions = [ext.strip().lower() for ext in config.telegram.allowed_extensions.split(",") if ext.strip()]
+    return {ext if ext.startswith(".") else f".{ext}" for ext in extensions}
+
+
+def _format_bytes(size_bytes: int) -> str:
+    """Convert bytes to human-readable MB format."""
+    return f"{size_bytes / (1024 * 1024):.1f} MB"
 
 
 def _check_access(user_id: int) -> bool:
@@ -210,9 +222,11 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not _check_access(update.effective_user.id):
         return ConversationHandler.END
     
+    allowed_extensions = sorted(_telegram_allowed_extensions())
     await update.message.reply_text(
         "📎 Отправьте файл для добавления в память.\n"
-        "Поддерживаемые форматы: .txt, .pdf, .md, .py, .js, ...\n"
+        f"Максимальный размер: {config.telegram.max_file_size_mb} MB\n"
+        f"Поддерживаемые форматы: {', '.join(allowed_extensions)}\n"
         "Или /cancel для отмены."
     )
     return CHOOSING
@@ -224,11 +238,31 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Отправте файл.")
         return CHOOSING
     
+    document = update.message.document
+    max_file_size_bytes = config.telegram.max_file_size_mb * 1024 * 1024
+    allowed_extensions = _telegram_allowed_extensions()
+    file_extension = Path(document.file_name or "").suffix.lower()
+
+    if document.file_size and document.file_size > max_file_size_bytes:
+        await update.message.reply_text(
+            "❌ Файл слишком большой. "
+            f"Лимит: {config.telegram.max_file_size_mb} MB, "
+            f"ваш файл: {_format_bytes(document.file_size)}."
+        )
+        return ConversationHandler.END
+
+    if not file_extension or file_extension not in allowed_extensions:
+        await update.message.reply_text(
+            "❌ Неподдерживаемый тип файла. "
+            f"Разрешены: {', '.join(sorted(allowed_extensions))}."
+        )
+        return ConversationHandler.END
+
     await update.message.reply_text("📥 Загружаю файл...")
-    
+
     try:
-        file = await update.message.document.get_file()
-        file_path = f"/tmp/telegram_{update.message.document.file_name}"
+        file = await document.get_file()
+        file_path = f"/tmp/telegram_{document.file_name}"
         await file.download_to_drive(file_path)
         
         # Process file
