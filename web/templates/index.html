@@ -589,7 +589,8 @@ async function deleteFile(id) {
 async function init() {
     try {
         const h = await api('/health');
-        document.getElementById('statusText').textContent = 'Connected (' + h.total + ' docs)';
+        const count = h.documents ?? 0;
+        document.getElementById('statusText').textContent = 'Connected (' + count + ' docs)';
     } catch(e) {
         document.getElementById('statusText').textContent = 'Error: ' + e.message;
     }
