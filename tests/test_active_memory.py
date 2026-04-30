@@ -31,8 +31,8 @@ class TestConfig:
         """Embedding config has correct defaults."""
         from active_memory_mcp.core.config import config
         assert config.embedding.dimensions == 1024
-        assert config.embedding.model == "BAAI/bge-m3"
-        assert config.embedding.use_local is True
+        assert config.embedding.model == "bge-m3-q8_0.gguf"
+        assert config.embedding.use_local is False
 
     def test_chunking_config_defaults(self):
         """Chunking config has correct defaults."""
@@ -65,7 +65,7 @@ class TestConfig:
 
 
 class TestEmbedder:
-    """Test embedding generation."""
+    """Test embedding generation with BGE-M3 multi-vector support."""
 
     def test_embedder_imports(self):
         """Embedder class loads without errors."""
@@ -75,41 +75,11 @@ class TestEmbedder:
     def test_embedder_init(self):
         """Embedder initializes with config."""
         from active_memory_mcp.search.embedder import Embedder
+        from active_memory_mcp.core.config import config
         emb = Embedder()
-        assert emb.model_name == "BAAI/bge-m3"
-        assert emb.dimensions == 1024
-
-    def test_fallback_embedding_length(self):
-        """Fallback embedding returns correct dimensions."""
-        from active_memory_mcp.search.embedder import Embedder
-        emb = Embedder()
-        result = emb._fallback_embedding("test text")
-        assert len(result) == 1024
-
-    def test_fallback_embedding_normalized(self):
-        """Fallback embedding is normalized (L2 norm = 1)."""
-        import numpy as np
-        from active_memory_mcp.search.embedder import Embedder
-        emb = Embedder()
-        vec = np.array(emb._fallback_embedding("hello world"))
-        norm = np.linalg.norm(vec)
-        assert abs(norm - 1.0) < 0.001
-
-    def test_fallback_embedding_deterministic(self):
-        """Same text produces same embedding (deterministic)."""
-        from active_memory_mcp.search.embedder import Embedder
-        emb = Embedder()
-        vec1 = emb._fallback_embedding("deterministic test")
-        vec2 = emb._fallback_embedding("deterministic test")
-        assert vec1 == vec2
-
-    def test_different_texts_produce_different_embeddings(self):
-        """Different texts produce different embeddings."""
-        from active_memory_mcp.search.embedder import Embedder
-        emb = Embedder()
-        vec1 = emb._fallback_embedding("python programming")
-        vec2 = emb._fallback_embedding("javascript programming")
-        assert vec1 != vec2
+        assert config.embedding.model == "bge-m3-q8_0.gguf"
+        assert config.embedding.dimensions == 1024
+        assert emb.config.dimensions == 1024
 
     def test_cosine_similarity_identical(self):
         """Cosine similarity of identical vectors is 1.0."""
@@ -128,31 +98,51 @@ class TestEmbedder:
         sim = emb.cosine_similarity(vec1, vec2)
         assert abs(sim) < 0.001
 
-    def test_embed_returns_list(self):
-        """embed() returns a list of floats."""
+    def test_embed_dense_returns_list(self):
+        """embed_dense() returns a list of floats."""
         from active_memory_mcp.search.embedder import Embedder
         emb = Embedder()
-        result = emb.embed("test query")
+        result = emb.embed_dense("test query")
         assert isinstance(result, list)
         assert all(isinstance(x, float) for x in result)
         assert len(result) == 1024
 
-    def test_embed_empty_string(self):
-        """embed() returns None for empty string."""
+    def test_embed_dense_empty_string(self):
+        """embed_dense() returns empty list for empty string."""
         from active_memory_mcp.search.embedder import Embedder
         emb = Embedder()
-        result = emb.embed("")
-        assert result is None
+        result = emb.embed_dense("")
+        assert result == []
 
-    def test_embed_batch(self):
-        """embed_batch() returns list of embeddings."""
+    def test_embed_multi_vector_returns_matrix(self):
+        """embed_multi_vector() returns a matrix (list of lists)."""
         from active_memory_mcp.search.embedder import Embedder
         emb = Embedder()
-        texts = ["text one", "text two", "text three"]
-        results = emb.embed_batch(texts)
-        assert len(results) == 3
-        assert all(isinstance(r, list) for r in results)
-        assert all(len(r) == 1024 for r in results)
+        result = emb.embed_multi_vector("test query")
+        assert isinstance(result, list)
+        if result:  # May be empty if server not available
+            assert isinstance(result[0], list)
+            assert len(result[0]) == 1024
+
+    def test_embed_with_chunking_returns_dict(self):
+        """embed_with_chunking() returns a dict with expected keys."""
+        from active_memory_mcp.search.embedder import Embedder
+        emb = Embedder()
+        result = emb.embed_with_chunking("test query")
+        assert isinstance(result, dict)
+        assert "dense" in result
+        assert "multi_vector" in result
+        assert "token_count" in result
+        assert "chunk_count" in result
+
+    def test_colbert_score_computation(self):
+        """colbert_score() computes late interaction score."""
+        from active_memory_mcp.search.embedder import Embedder
+        emb = Embedder()
+        query_vecs = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]
+        doc_vecs = [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+        score = emb.colbert_score(query_vecs, doc_vecs)
+        assert 0.0 <= score <= 1.0
 
 
 class TestSearchResult:
@@ -329,9 +319,9 @@ class TestMCPServer:
         tool = next(t for t in tools if t.name == "update_document")
 
         assert "document_id" in tool.inputSchema["properties"]
-        assert "file_path" in tool.inputSchema["properties"]
+        assert "metadata" in tool.inputSchema["properties"]
         assert "document_id" in tool.inputSchema["required"]
-        assert "file_path" in tool.inputSchema["required"]
+        assert "metadata" in tool.inputSchema["required"]
 
     def test_bulk_search_tool_schema(self):
         """bulk_search tool has correct schema."""

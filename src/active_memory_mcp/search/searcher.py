@@ -1,4 +1,5 @@
 import logging
+import httpx
 from typing import List, Dict, Any
 from ..core.config import config
 from .embedder import Embedder
@@ -32,7 +33,7 @@ class HybridSearcher:
         self.hybrid_alpha = config.search.hybrid_alpha
         self.min_score = config.search.min_score_threshold
 
-    def search(self, query: str, top_k: int = None, filters: Dict[str, Any] = None, session=None) -> List[SearchResult]:
+    def search(self, query: str, top_k: int = None, mode: str = "hybrid", filters: Dict[str, Any] = None, session=None) -> List[SearchResult]:
         from ..storage.db import get_session
         top_k = top_k or self.top_k
         should_close = False
@@ -40,18 +41,31 @@ class HybridSearcher:
             session = get_session()
             should_close = True
         try:
-            query_embedding = self.embedder.embed(query)
-            vector_results = self._vector_search(session, query_embedding, top_k * 3, filters)
-            keyword_results = self._keyword_search(session, query, top_k * 3, filters)
-            combined = self._combine_results(vector_results, keyword_results, top_k)
-            combined.sort(key=lambda r: r.score, reverse=True)
-            final_results = [r for r in combined if r.score >= self.min_score][:top_k]
-            return final_results
+            if mode == "dense":
+                query_embedding = self.embedder.embed_dense(query)
+                results = self._vector_search(session, query_embedding, top_k * 3, filters)
+            elif mode == "multi-vector":
+                query_multi = self.embedder.embed_multi_vector(query)
+                results = self._search_multi_vector(session, query_multi, top_k * 3)
+            elif mode == "hybrid":
+                query_embedding = self.embedder.embed_dense(query)
+                query_multi = self.embedder.embed_multi_vector(query)
+                vector_results = self._vector_search(session, query_embedding, top_k * 3, filters)
+                multi_results = self._search_multi_vector(session, query_multi, top_k * 3)
+                keyword_results = self._keyword_search(session, query, top_k * 3, filters)
+                results = self._combine_results_with_mode(
+                    vector_results, multi_results, keyword_results, top_k
+                )
+            else:
+                raise ValueError(f"Unknown search mode: {mode}")
+
+            results = [r for r in results if r.score >= self.min_score][:top_k]
+            return results
         finally:
             if should_close:
                 session.close()
 
-    def bulk_search(self, queries: List[str], top_k: int = None, filters: Dict[str, Any] = None) -> Dict[str, List[SearchResult]]:
+    def bulk_search(self, queries: List[str], top_k: int = None, filters: Dict[str, Any] = None, mode: str = "hybrid") -> Dict[str, List[SearchResult]]:
         """Execute multiple searches in one call, reusing the same session."""
         from ..storage.db import get_session
         top_k = top_k or self.top_k
@@ -59,10 +73,69 @@ class HybridSearcher:
         try:
             results = {}
             for q in queries:
-                results[q] = self.search(q, top_k=top_k, filters=filters, session=session)
+                results[q] = self.search(q, top_k=top_k, filters=filters, session=session, mode=mode)
             return results
         finally:
             session.close()
+
+    def _search_multi_vector(self, session, query_vecs: List[List[float]], limit: int) -> List[SearchResult]:
+        """ColBERT-style late interaction search."""
+        if not query_vecs:
+            return []
+        try:
+            embeddings = session.query(Embedding).filter(
+                Embedding.multi_vector.isnot(None)
+            ).limit(1000).all()
+            
+            results = []
+            for emb in embeddings:
+                doc_multi = emb.multi_vector  # JSON: [tokens][1024]
+                if not doc_multi:
+                    continue
+                score = self.embedder.colbert_score(query_vecs, doc_multi)
+                chunk = session.query(Chunk).filter(Chunk.id == emb.chunk_id).first()
+                document = chunk.document if chunk else None
+                results.append(
+                    SearchResult(
+                        emb.chunk_id,
+                        chunk.content if chunk else "",
+                        score,
+                        "multi-vector",
+                        self._metadata(document, chunk) if document else {}
+                    )
+                )
+            results.sort(key=lambda r: r.score, reverse=True)
+            return results[:limit]
+        except Exception as e:
+            logger.warning(f"Multi-vector search failed: {e}")
+            return []
+
+    def _combine_results_with_mode(
+        self, vector_results, multi_results, keyword_results, top_k
+    ):
+        """Combine results from multiple search modes."""
+        combined_dict = {}
+        for r in vector_results:
+            if r.chunk_id not in combined_dict:
+                combined_dict[r.chunk_id] = r
+            else:
+                combined_dict[r.chunk_id].score = (1 - self.hybrid_alpha) * r.score + self.hybrid_alpha * combined_dict[r.chunk_id].score
+                combined_dict[r.chunk_id].source = "hybrid"
+        for r in multi_results:
+            if r.chunk_id not in combined_dict:
+                combined_dict[r.chunk_id] = r
+            else:
+                combined_dict[r.chunk_id].score = (1 - self.hybrid_alpha) * combined_dict[r.chunk_id].score + self.hybrid_alpha * r.score
+                combined_dict[r.chunk_id].source = "hybrid"
+        for r in keyword_results:
+            if r.chunk_id not in combined_dict:
+                combined_dict[r.chunk_id] = r
+            else:
+                combined_dict[r.chunk_id].score = self.hybrid_alpha * r.score + (1 - self.hybrid_alpha) * combined_dict[r.chunk_id].score
+                combined_dict[r.chunk_id].source = "hybrid"
+        results = list(combined_dict.values())
+        results.sort(key=lambda r: r.score, reverse=True)
+        return results[:top_k]
 
     def search_by_date(
         self,
@@ -71,6 +144,7 @@ class HybridSearcher:
         date_to: str = None,
         top_k: int = None,
         filters: Dict[str, Any] = None,
+        mode: str = "hybrid",
     ) -> List[SearchResult]:
         """Search with date range filter. Dates in ISO format (YYYY-MM-DD)."""
         date_filters = dict(filters or {})
@@ -78,7 +152,7 @@ class HybridSearcher:
             date_filters["date_from"] = date_from
         if date_to:
             date_filters["date_to"] = date_to
-        return self.search(query, top_k=top_k, filters=date_filters)
+        return self.search(query, top_k=top_k, filters=date_filters, mode=mode)
 
     def _vector_search(self, session, query_embedding, limit: int, filters):
         """Vector search using pgvector cosine distance or brute-force fallback."""
@@ -276,6 +350,7 @@ class HybridSearcher:
         self,
         query: str,
         max_tokens: int = None,
+        mode: str = "hybrid",
         filters: Dict[str, Any] = None,
         prioritize: bool = True,
     ) -> List[SearchResult]:
@@ -285,7 +360,8 @@ class HybridSearcher:
         pinned and high-importance documents.
         """
         max_tokens = max_tokens or config.search.context_max_tokens
-        results = self.search(query, top_k=50, filters=filters)
+        results = self.search(query, top_k=50, mode=mode, filters=filters)
+
 
         if prioritize:
             results = self._apply_priority_boost(results)
@@ -307,6 +383,7 @@ class HybridSearcher:
         self,
         query: str = None,
         max_tokens: int = None,
+        mode: str = "hybrid",
         include_pinned: bool = True,
         include_important: bool = True,
         importance_threshold: int = 2,
@@ -346,7 +423,7 @@ class HybridSearcher:
                 important_chunks.sort(key=lambda r: r.score, reverse=True)
 
             if query:
-                search_results = self.search(query, top_k=50)
+                search_results = self.search(query, top_k=50, mode=mode)
                 search_results = self._apply_priority_boost(search_results)
                 seen = {r.chunk_id for r in important_chunks}
                 for sr in search_results:

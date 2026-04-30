@@ -37,3 +37,15 @@ High-performance knowledge management with PostgreSQL/pgvector, chunking, hybrid
 
 ## Adding to Claude Desktop
 
+
+## IDE Integration
+
+See [IDE_INTEGRATION.md](IDE_INTEGRATION.md) for:
+- Cursor IDE setup
+- VS Code extension config
+- Telegram bot commands
+
+See [HERMES_INTEGRATION.md](HERMES_INTEGRATION.md) for:
+- Hermes Agent as MCP client
+- Using ActiveMemory as context memory for long sessions
+- Tool examples for development workflows

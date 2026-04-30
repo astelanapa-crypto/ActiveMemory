@@ -19,6 +19,7 @@
 - [ ] 1.2 Добавить `redis>=5.0.0` в dependencies
   - **Зачем:** Redis-клиент для кэширования эмбеддингов. Primary кэш перед БД. Fallback на in-memory dict если Redis недоступен.
   - **Где вставить:** В список `dependencies` в `pyproject.toml`
+  - **sudo** Пароль '111'
 
 - [ ] 1.3 Удалить `alembic>=1.13.1`
   - **Зачем:** Миграций нет. Проект использует `Base.metadata.create_all()`. Если появятся миграции — вернём.

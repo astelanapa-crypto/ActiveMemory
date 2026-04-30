@@ -42,6 +42,8 @@ env/
 
 # Logs
 *.log
+/tmp/active_memory_*.log
+/tmp/active_memory_*.pid
 
 # OS
 .DS_Store
@@ -71,3 +73,7 @@ htmlcov/
 *.tmp
 *.bak
 .cache/
+
+# Script runtime files
+scripts/systemd/*.service
+*.pid

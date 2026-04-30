@@ -35,7 +35,7 @@ async def handle_list_tools() -> List[types.Tool]:
     return [
         types.Tool(
             name="search_memory",
-            description="Search memory for relevant information using hybrid (vector + keyword) search.",
+            description="Search memory for relevant information using vector, keyword, multi-vector, or hybrid search.",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -48,6 +48,11 @@ async def handle_list_tools() -> List[types.Tool]:
                         "minimum": 1,
                         "maximum": 20,
                         "description": "Number of results to return (default: 5)",
+                    },
+                    "search_mode": {
+                        "type": "string",
+                        "enum": ["dense", "multi-vector", "hybrid"],
+                        "description": "Search mode: dense (vector only), multi-vector (ColBERT), or hybrid (default: hybrid)",
                     },
                     "filetype": {
                         "type": "string",
@@ -128,93 +133,68 @@ async def handle_list_tools() -> List[types.Tool]:
             inputSchema={"type": "object", "properties": {}},
         ),
         types.Tool(
-            name="update_document",
-            description="Update a document: replace content and re-embed. Old chunks are deleted.",
+            name="export_memory",
+            description="Export memory database to JSON or CSV format.",
             inputSchema={
                 "type": "object",
                 "properties": {
-                    "document_id": {
-                        "type": "number",
-                        "description": "ID of the document to update",
+                    "format": {
+                        "type": "string",
+                        "enum": ["json", "csv"],
+                        "description": "Export format (default: json)",
                     },
+                    "include_embeddings": {
+                        "type": "boolean",
+                        "description": "Include embedding vectors in JSON export (default: true)",
+                    },
+                },
+            },
+        ),
+        types.Tool(
+            name="import_memory",
+            description="Import memory from JSON or CSV file. Supports merge (add new) and replace (clear all) modes.",
+            inputSchema={
+                "type": "object",
+                "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the new file",
+                        "description": "Path to JSON or CSV file to import",
                     },
-                    "metadata": {
-                        "type": "object",
-                        "description": "Optional metadata overrides",
-                    },
-                },
-                "required": ["document_id", "file_path"],
-            },
-        ),
-        types.Tool(
-            name="bulk_search",
-            description="Execute multiple search queries in one call.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "queries": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "List of search queries",
-                    },
-                    "top_k": {
-                        "type": "number",
-                        "minimum": 1,
-                        "maximum": 20,
-                        "description": "Number of results per query (default: 5)",
-                    },
-                    "filetype": {
+                    "mode": {
                         "type": "string",
-                        "description": "Filter by file type",
+                        "enum": ["merge", "replace"],
+                        "description": "Import mode: merge (add new) or replace (clear all first)",
+                    },
+                    "validate_only": {
+                        "type": "boolean",
+                        "description": "Only validate, do not actually import (default: false)",
                     },
                 },
-                "required": ["queries"],
+                "required": ["file_path"],
             },
         ),
         types.Tool(
-            name="update_document_metadata",
-            description="Update metadata fields on an existing document.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "document_id": {
-                        "type": "number",
-                        "description": "ID of the document",
-                    },
-                    "metadata": {
-                        "type": "object",
-                        "description": "Fields to update (title, author, category, importance, pinned, etc.)",
-                    },
-                },
-                "required": ["document_id", "metadata"],
-            },
-        ),
-        types.Tool(
-            name="search_by_date",
-            description="Search within a date range.",
+            name="smart_context",
+            description="Get smart context for a query with token budget management.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {
                         "type": "string",
-                        "description": "Search query",
+                        "description": "Query to get context for",
                     },
-                    "date_from": {
-                        "type": "string",
-                        "description": "Start date (ISO format: YYYY-MM-DD)",
-                    },
-                    "date_to": {
-                        "type": "string",
-                        "description": "End date (ISO format: YYYY-MM-DD)",
-                    },
-                    "top_k": {
+                    "max_tokens": {
                         "type": "number",
-                        "minimum": 1,
-                        "maximum": 20,
-                        "description": "Number of results (default: 5)",
+                        "description": "Maximum tokens in context (default: from config)",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["dense", "multi-vector", "hybrid"],
+                        "description": "Search mode (default: hybrid)",
+                    },
+                    "prioritize": {
+                        "type": "boolean",
+                        "description": "Prioritize important/pinned docs (default: true)",
                     },
                     "filetype": {
                         "type": "string",
@@ -225,14 +205,131 @@ async def handle_list_tools() -> List[types.Tool]:
             },
         ),
         types.Tool(
-            name="rename_document",
-            description="Rename a document without changing its content.",
+            name="get_context",
+            description="Auto-collect important context based on criteria.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Optional query to include relevant results",
+                    },
+                    "max_tokens": {
+                        "type": "number",
+                        "description": "Maximum tokens in context",
+                    },
+                    "mode": {
+                        "type": "string",
+                        "enum": ["dense", "multi-vector", "hybrid"],
+                        "description": "Search mode if query is provided (default: hybrid)",
+                    },
+                    "pinned": {
+                        "type": "boolean",
+                        "description": "Include pinned documents",
+                    },
+                    "important": {
+                        "type": "boolean",
+                        "description": "Include important documents (importance >= 3)",
+                    },
+                },
+            },
+        ),
+        types.Tool(
+            name="update_document",
+            description="Update document metadata.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "document_id": {
                         "type": "number",
-                        "description": "ID of the document",
+                        "description": "Document ID",
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Metadata to update",
+                    },
+                },
+                "required": ["document_id", "metadata"],
+            },
+        ),
+        types.Tool(
+            name="bulk_search",
+            description="Perform multiple searches in one call with optional search mode.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "queries": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of search queries",
+                    },
+                    "search_mode": {
+                        "type": "string",
+                        "enum": ["dense", "multi-vector", "hybrid"],
+                        "description": "Search mode for all queries (default: hybrid)",
+                    },
+                },
+                "required": ["queries"],
+            },
+        ),
+        types.Tool(
+            name="update_document_metadata",
+            description="Update only document metadata (alias for update_document).",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "number",
+                        "description": "Document ID",
+                    },
+                    "metadata": {
+                        "type": "object",
+                        "description": "Metadata to update",
+                    },
+                },
+                "required": ["document_id", "metadata"],
+            },
+        ),
+        types.Tool(
+            name="search_by_date",
+            description="Search memory within a date range with optional search mode.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "Search query",
+                    },
+                    "date_from": {
+                        "type": "string",
+                        "description": "Start date (ISO format)",
+                    },
+                    "date_to": {
+                        "type": "string",
+                        "description": "End date (ISO format)",
+                    },
+                    "top_k": {
+                        "type": "number",
+                        "description": "Number of results",
+                    },
+                    "search_mode": {
+                        "type": "string",
+                        "enum": ["dense", "multi-vector", "hybrid"],
+                        "description": "Search mode (default: hybrid)",
+                    },
+                },
+                "required": ["query"],
+            },
+        ),
+        types.Tool(
+            name="rename_document",
+            description="Rename a document.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "document_id": {
+                        "type": "number",
+                        "description": "Document ID",
                     },
                     "new_filename": {
                         "type": "string",
@@ -243,75 +340,14 @@ async def handle_list_tools() -> List[types.Tool]:
             },
         ),
         types.Tool(
-            name="smart_context",
-            description="Search with token budget limit. Returns results that fit within max_tokens, prioritizing pinned and high-importance documents.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Search query",
-                    },
-                    "max_tokens": {
-                        "type": "number",
-                        "minimum": 100,
-                        "maximum": 32000,
-                        "description": "Maximum token budget (default: 4000)",
-                    },
-                    "filetype": {
-                        "type": "string",
-                        "description": "Filter by file type",
-                    },
-                    "prioritize": {
-                        "type": "boolean",
-                        "description": "Boost pinned/high-importance docs (default: true)",
-                    },
-                },
-                "required": ["query"],
-            },
-        ),
-        types.Tool(
-            name="get_context",
-            description="Auto-collect important context: pinned + high-importance documents, optionally combined with search results.",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "Optional search query to combine with static context",
-                    },
-                    "max_tokens": {
-                        "type": "number",
-                        "minimum": 100,
-                        "maximum": 32000,
-                        "description": "Maximum token budget (default: 4000)",
-                    },
-                    "include_pinned": {
-                        "type": "boolean",
-                        "description": "Include pinned documents (default: true)",
-                    },
-                    "include_important": {
-                        "type": "boolean",
-                        "description": "Include high-importance documents (default: true)",
-                    },
-                    "importance_threshold": {
-                        "type": "number",
-                        "minimum": 1,
-                        "maximum": 5,
-                        "description": "Max importance value to include (default: 2)",
-                    },
-                },
-            },
-        ),
-        types.Tool(
             name="reindex_embeddings",
-            description="Recalculate embeddings for all chunks or a specific document. Use after model changes.",
+            description="Re-index embeddings for a document or all documents.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "document_id": {
                         "type": "number",
-                        "description": "Optional: reindex only this document",
+                        "description": "Document ID (optional, reindexes all if omitted)",
                     },
                 },
             },
@@ -330,11 +366,12 @@ async def handle_call_tool(
         if name == "search_memory":
             query = arguments["query"]
             top_k = int(arguments.get("top_k", 5))
+            mode = arguments.get("search_mode", "hybrid")
             filters = {}
             if "filetype" in arguments:
                 filters["filetype"] = arguments["filetype"]
 
-            results = searcher.search(query, top_k=top_k, filters=filters)
+            results = searcher.search(query, top_k=top_k, mode=mode, filters=filters)
 
             if not results:
                 return [types.TextContent(
@@ -354,13 +391,14 @@ async def handle_call_tool(
         elif name == "smart_context":
             query = arguments["query"]
             max_tokens = int(arguments.get("max_tokens", config.search.context_max_tokens))
+            mode = arguments.get("mode", "hybrid")
             prioritize = arguments.get("prioritize", True)
             filters = {}
             if "filetype" in arguments:
                 filters["filetype"] = arguments["filetype"]
 
             results = searcher.smart_context(
-                query, max_tokens=max_tokens, filters=filters, prioritize=prioritize,
+                query, max_tokens=max_tokens, mode=mode, filters=filters, prioritize=prioritize,
             )
 
             if not results:
@@ -384,6 +422,7 @@ async def handle_call_tool(
 
         elif name == "get_context":
             max_tokens = int(arguments.get("max_tokens", config.search.context_max_tokens))
+            mode = arguments.get("mode", "hybrid")
             include_pinned = arguments.get("include_pinned", True)
             include_important = arguments.get("include_important", True)
             importance_threshold = int(arguments.get("importance_threshold", 2))
@@ -392,6 +431,7 @@ async def handle_call_tool(
             results = searcher.get_context(
                 query=query,
                 max_tokens=max_tokens,
+                mode=mode,
                 include_pinned=include_pinned,
                 include_important=include_important,
                 importance_threshold=importance_threshold,
@@ -446,7 +486,57 @@ async def handle_call_tool(
                     type="text",
                     text=f"Failed: {result.get('message', 'Unknown error')}",
                 )]
-        
+
+        elif name == "export_memory":
+            from ..core.exporter import export_all_json, export_all_csv
+            import json
+            format = arguments.get("format", "json")
+            include_embeddings = arguments.get("include_embeddings", True)
+            
+            if format == "csv":
+                content = export_all_csv()
+                return [types.TextContent(
+                    type="text",
+                    text=f"CSV Export:\n{content[:3000]}..." if len(content) > 3000 else content,
+                )]
+            else:
+                data = export_all_json(include_embeddings=include_embeddings)
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps(data, indent=2)[:4000],
+                )]
+
+        elif name == "import_memory":
+            from ..core.importer import import_from_file, validate_import_data
+            import json
+            file_path = arguments["file_path"]
+            mode = arguments.get("mode", "merge")
+            validate_only = arguments.get("validate_only", False)
+            
+            if validate_only:
+                try:
+                    with open(file_path, 'r', encoding='utf-8') as f:
+                        if file_path.endswith('.json'):
+                            data = json.load(f)
+                            result = validate_import_data(data)
+                        else:
+                            result = {"valid": True, "message": "CSV validation not required"}
+                    return [types.TextContent(
+                        type="text",
+                        text=json.dumps(result, indent=2),
+                    )]
+                except Exception as e:
+                    return [types.TextContent(
+                        type="text",
+                        text=f"Validation error: {e}",
+                    )]
+            else:
+                result = import_from_file(file_path, mode=mode)
+                return [types.TextContent(
+                    type="text",
+                    text=json.dumps(result, indent=2),
+                )]
+
         elif name == "store_document":
             file_path = arguments["file_path"]
             metadata = arguments.get("metadata", {})
@@ -586,11 +676,12 @@ async def handle_call_tool(
         elif name == "bulk_search":
             queries = arguments["queries"]
             top_k = int(arguments.get("top_k", 5))
+            search_mode = arguments.get("search_mode", "hybrid")
             filters = {}
             if "filetype" in arguments:
                 filters["filetype"] = arguments["filetype"]
-            
-            results = searcher.bulk_search(queries, top_k=top_k, filters=filters)
+
+            results = searcher.bulk_search(queries, top_k=top_k, mode=search_mode, filters=filters)
             
             lines = []
             for q, res_list in results.items():
@@ -624,6 +715,7 @@ async def handle_call_tool(
         elif name == "search_by_date":
             query = arguments["query"]
             top_k = int(arguments.get("top_k", 5))
+            search_mode = arguments.get("search_mode", "hybrid")
             date_from = arguments.get("date_from")
             date_to = arguments.get("date_to")
             filters = {}
@@ -647,7 +739,7 @@ async def handle_call_tool(
 
             results = searcher.search_by_date(
                 query, date_from=date_from, date_to=date_to,
-                top_k=top_k, filters=filters,
+                top_k=top_k, filters=filters, mode=search_mode,
             )
             
             if not results:

@@ -26,11 +26,15 @@ dependencies = [
     "jinja2>=3.1.4",
     "python-multipart>=0.0.6",
     "PyPDF2>=3.0.1",
+    "scikit-learn>=1.5.0",
+    "umap-learn>=0.5.0",
+    "aiogram>=3.0.0",
 ]
 
 [project.scripts]
 active-memory-mcp = "active_memory_mcp.main:main"
 web-dashboard = "active_memory_mcp.web.server:main"
+tg-bot = "active_memory_mcp.telegram.bot:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/active_memory_mcp"]

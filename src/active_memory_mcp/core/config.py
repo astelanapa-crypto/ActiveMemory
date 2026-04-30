@@ -39,10 +39,14 @@ class DatabaseConfig:
 class EmbeddingConfig:
     """Embedding model configuration."""
     endpoint: str = os.getenv("AM_EMBEDDING_ENDPOINT", "http://192.168.1.199:8899/v1/embeddings")
-    model: str = os.getenv("AM_EMBEDDING_MODEL", "BAAI/bge-m3")
+    # Native endpoint for multi-vector (ColBERT) - no pooling
+    endpoint_native: str = os.getenv("AM_EMBEDDING_ENDPOINT_NATIVE", "http://192.168.1.199:8899/embedding")
+    model: str = os.getenv("AM_EMBEDDING_MODEL", "bge-m3-q8_0.gguf")
     dimensions: int = int(os.getenv("AM_EMBEDDING_DIM", "1024"))
-    use_local: bool = os.getenv("AM_USE_LOCAL_EMBEDDING", "true").lower() == "true"
+    use_local: bool = os.getenv("AM_USE_LOCAL_EMBEDDING", "false").lower() == "true"
     local_model_path: str = os.getenv("AM_LOCAL_MODEL_PATH", "/models/bge-m3-q8_0.gguf")
+    # Optimal chunk size for speed (based on tests: 30-50 tokens optimal)
+    optimal_chunk_tokens: int = int(os.getenv("AM_OPTIMAL_CHUNK_TOKENS", "40"))
 
 
 @dataclass
@@ -81,6 +85,32 @@ class SecurityConfig:
 
 
 @dataclass
+class ExportConfig:
+    """Export and snapshot configuration."""
+    snapshot_dir: str = os.getenv("AM_SNAPSHOT_DIR", "data/snapshots")
+    snapshot_retention_days: int = int(os.getenv("AM_SNAPSHOT_RETENTION_DAYS", "7"))
+    auto_snapshot: bool = os.getenv("AM_AUTO_SNAPSHOT", "false").lower() == "true"
+    auto_snapshot_interval_hours: int = int(os.getenv("AM_AUTO_SNAPSHOT_INTERVAL", "24"))
+
+
+@dataclass
+class TelegramConfig:
+    """Telegram bot configuration."""
+    bot_token: str = os.getenv("TG_BOT_TOKEN", "")
+    admin_ids: str = os.getenv("TG_ADMIN_IDS", "")
+    allowed_users: str = os.getenv("TG_ALLOWED_USERS", "")
+
+
+@dataclass
+class VisualizationConfig:
+    """Visualization and analytics configuration."""
+    clustering_method: str = os.getenv("AM_CLUSTERING_METHOD", "tsne")
+    clustering_perplexity: int = int(os.getenv("AM_CLUSTERING_PERPLEXITY", "30"))
+    heatmap_resolution: str = os.getenv("AM_HEATMAP_RESOLUTION", "daily")  # daily, weekly, monthly
+    enable_heatmap: bool = os.getenv("AM_ENABLE_HEATMAP", "true").lower() == "true"
+
+
+@dataclass
 class WebConfig:
     """Web dashboard configuration."""
     host: str = os.getenv("AM_WEB_HOST", "0.0.0.0")
@@ -99,6 +129,9 @@ class Config:
         self.cache = CacheConfig()
         self.web = WebConfig()
         self.security = SecurityConfig()
+        self.export = ExportConfig()
+        self.visualization = VisualizationConfig()
+        self.telegram = TelegramConfig()
 
     @property
     def database_url(self) -> str:

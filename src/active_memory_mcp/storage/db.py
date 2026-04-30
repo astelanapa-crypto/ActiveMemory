@@ -92,6 +92,11 @@ class Embedding(Base):
     encrypted_embedding = Column(Text, nullable=True)  # Fernet-encrypted embedding for sensitive docs
     model = Column(String(200), default="bge-m3")
     dimensions = Column(Integer, default=1024)
+    # BGE-M3 multi-vector support
+    multi_vector = Column(JSON, nullable=True)  # Matrix [tokens][1024]
+    token_count = Column(Integer, default=0)
+    sparse_weights = Column(JSON, nullable=True)  # Lexical weights
+    search_mode = Column(String(50), default="dense")
     created_at = Column(DateTime, default=datetime.utcnow)
 
     chunk = relationship("Chunk", back_populates="embedding")
@@ -176,28 +181,37 @@ def _configure_postgres_ddl():
             if config.db.use_pgvector:
                 conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
 
-            # FTS: tsvector column, GIN index, and auto-update trigger
+            # FTS: create GIN index on tsvector expression, add trigger for auto-update
             conn.execute(text("""
-                ALTER TABLE chunks ADD COLUMN IF NOT EXISTS search_vector tsvector;
-                CREATE INDEX IF NOT EXISTS ix_chunks_fts ON chunks USING GIN(search_vector);
-                CREATE OR REPLACE FUNCTION chunks_tsvector_trigger() RETURNS trigger AS $$
+                CREATE INDEX IF NOT EXISTS ix_chunks_fts 
+                ON chunks 
+                USING GIN(to_tsvector('russian', content));
+                
+                CREATE OR REPLACE FUNCTION chunks_tsvector_trigger() 
+                RETURNS trigger AS $$
                 BEGIN
-                    NEW.search_vector := to_tsvector('russian', NEW.content);
+                    NEW.search_vector = to_tsvector('russian', NEW.content);
                     RETURN NEW;
                 END;
                 $$ LANGUAGE plpgsql;
+                
                 DROP TRIGGER IF EXISTS chunks_tsvector_refresh ON chunks;
                 CREATE TRIGGER chunks_tsvector_refresh
                     BEFORE INSERT OR UPDATE ON chunks
                     FOR EACH ROW EXECUTE FUNCTION chunks_tsvector_trigger();
             """))
 
-            # HNSW index for fast vector search
-            conn.execute(text("""
-                CREATE INDEX IF NOT EXISTS ix_embeddings_hnsw ON embeddings
-                USING hnsw (embedding vector_cosine_ops)
-                WITH (m = 16, ef_construction = 64);
-            """))
+            # HNSW index for fast vector search (only if pgvector available)
+            if config.db.use_pgvector and Vector:
+                try:
+                    conn.execute(text("""
+                        CREATE INDEX IF NOT EXISTS ix_embeddings_hnsw 
+                        ON embeddings 
+                        USING hnsw (embedding vector_cosine_ops)
+                        WITH (m = 16, ef_construction = 64);
+                    """))
+                except Exception as e:
+                    logger.warning(f"Could not create HNSW index: {e}")
 
             conn.commit()
             logger.info("PostgreSQL DDL configured: pgvector, FTS, HNSW index")

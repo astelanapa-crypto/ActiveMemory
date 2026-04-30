@@ -1003,6 +1003,8 @@ button,input,select,textarea{font:inherit;letter-spacing:0}button{cursor:pointer
         <div class="chart-card"><h3>Категории</h3><div class="chart-canvas-wrap"><canvas id="chartCategories"></canvas></div></div>
         <div class="chart-card"><h3>Распределение важности</h3><div class="chart-canvas-wrap"><canvas id="chartImportance"></canvas></div></div>
         <div class="chart-card"><h3>Типы файлов</h3><div class="chart-canvas-wrap"><canvas id="chartFiletypes"></canvas></div></div>
+        <div class="chart-card"><h3>Векторное пространство</h3><div class="chart-canvas-wrap"><canvas id="chartVectorSpace"></canvas></div></div>
+        <div class="chart-card"><h3>Тепловая карта доступа</h3><div class="chart-canvas-wrap"><canvas id="chartHeatmap"></canvas></div></div>
       </div>
     </section>
 
@@ -1274,14 +1276,36 @@ async function loadCharts() {
     const textColor = getComputedStyle(document.documentElement).getPropertyValue('--muted').trim();
     const gridColor = getComputedStyle(document.documentElement).getPropertyValue('--line').trim();
     const brandColor = getComputedStyle(document.documentElement).getPropertyValue('--brand').trim();
+    const catColors = [brandColor, '#3b82f6', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4', '#10b981', '#f97316'];
 
-    const chartOpts = (title) => ({
-      responsive: true, maintainAspectRatio: false,
-      plugins: { legend: { display: title === undefined, labels: { color: textColor, font: { weight: 600 } } } },
-      scales: {
-        x: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor } },
-        y: { ticks: { color: textColor, font: { size: 11 } }, grid: { color: gridColor }, beginAtZero: true }
-      }
+    window._chartInstances.activity = new Chart($('chartActivity'), {
+      type: 'line',
+      data: { labels: activity.activity.map(a => a.date), datasets: [{ data: activity.activity.map(a => a.count), borderColor: brandColor, backgroundColor: brandColor + '20', fill: true, tension: 0.4, pointRadius: 3 }] },
+      options: { ...chartOpts(), scales: { x: { ticks: { color: textColor, maxRotation: 45 }, grid: { display: false } }, y: { ticks: { color: textColor }, grid: { color: gridColor }, beginAtZero: true } }, plugins: { title: { display: true, text: 'Активность по дням', color: textColor } } }
+    });
+    window._chartInstances.categories = new Chart($('chartCategories'), {
+      type: 'doughnut',
+      data: { labels: activity.categories.map(c => c.name), datasets: [{ data: activity.categories.map(c => c.count), backgroundColor: catColors.slice(0, activity.categories.length), borderWidth: 0 }] },
+      options: { ...chartOpts(), plugins: { title: { display: true, text: 'Категории', color: textColor } } }
+    });
+    window._chartInstances.importance = new Chart($('chartImportance'), {
+      type: 'bar',
+      data: { labels: activity.importance.map(i => i.label), datasets: [{ data: activity.importance.map(i => i.count), backgroundColor: catColors, borderRadius: 6, barPercentage: 0.6 }] },
+      options: { ...chartOpts(), scales: { x: { ticks: { color: textColor }, grid: { display: false } }, y: { ticks: { color: textColor }, grid: { color: gridColor }, beginAtZero: true } }, plugins: { title: { display: true, text: 'Распределение важности', color: textColor } } }
+    });
+    window._chartInstances.filetypes = new Chart($('chartFiletypes'), {
+      type: 'bar',
+      data: { labels: activity.filetypes.map(f => f.type), datasets: [{ data: activity.filetypes.map(f => f.count), backgroundColor: catColors.slice(0, activity.filetypes.length), borderRadius: 6, barPercentage: 0.6 }] },
+      options: { ...chartOpts(), indexAxis: 'y', scales: { x: { ticks: { color: textColor }, grid: { color: gridColor }, beginAtZero: true }, y: { ticks: { color: textColor, font: { weight: 600 } }, grid: { display: false } } }, plugins: { title: { display: true, text: 'Типы файлов', color: textColor } } }
+    });
+
+    // Load new visualization charts
+    await loadVectorSpace();
+    await loadHeatmap();
+  } catch (err) {
+    toast('Ошибка загрузки графиков: ' + err.message, 'error');
+  }
+}
     });
 
     if (window._chartInstances.activity) window._chartInstances.activity.destroy();
@@ -1333,6 +1357,100 @@ async function loadCharts() {
     });
   } catch (err) {
     toast('Ошибка загрузки графиков: ' + err.message, 'error');
+  }
+}
+
+/* Visualization — Vector Space & Heatmap */
+async function loadVectorSpace() {
+  try {
+    const d = await api('/api/visualization/vector-space?method=tsne');
+    if (!d.points || !d.points.length) {
+      $('chartVectorSpace').parentElement.innerHTML = '<div class="empty">Нет данных для визуализации</div>';
+      return;
+    }
+    
+    const ctx = $('chartVectorSpace').getContext('2d');
+    if (window._chartInstances.vectorSpace) window._chartInstances.vectorSpace.destroy();
+    
+    window._chartInstances.vectorSpace = new Chart(ctx, {
+      type: 'scatter',
+      data: {
+        datasets: [{
+          label: 'Documents',
+          data: d.points.map((p, i) => ({ x: p[0], y: p[1], doc: d.documents[i] })),
+          backgroundColor: catColors,
+          radius: 6,
+          hoverRadius: 9,
+        }]
+      },
+      options: {
+        ...chartOpts(),
+        scales: {
+          x: { display: false },
+          y: { display: false }
+        },
+        plugins: {
+          tooltip: {
+            callbacks: {
+              label: function(ctx) {
+                const doc = ctx.raw.doc;
+                return doc ? `${doc.filename} (${doc.filetype})` : '';
+              }
+            }
+          },
+          title: {
+            display: true,
+            text: `Векторное пространство (${d.method.toUpperCase()})`,
+            color: textColor,
+          }
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Vector space error:', err);
+  }
+}
+
+async function loadHeatmap() {
+  try {
+    const d = await api('/api/analytics/heatmap?days=7');
+    if (!d.data) return;
+    
+    const ctx = $('chartHeatmap').getContext('2d');
+    if (window._chartInstances.heatmap) window._chartInstances.heatmap.destroy();
+    
+    const dates = Object.keys(d.data);
+    const types = ['search', 'view', 'context', 'update'];
+    const colors = ['rgba(15,118,110,0.8)', 'rgba(59,130,246,0.8)', 'rgba(245,158,11,0.8)', 'rgba(239,68,68,0.8)'];
+    
+    window._chartInstances.heatmap = new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: dates.reverse(),
+        datasets: types.map((type, i) => ({
+          label: type === 'search' ? 'Поиск' : type === 'view' ? 'Просмотр' : type === 'context' ? 'Контекст' : 'Обновление',
+          data: dates.map(date => d.data[date][type] || 0).reverse(),
+          backgroundColor: colors[i],
+          stack: 'Stack 0',
+        }))
+      },
+      options: {
+        ...chartOpts(),
+        scales: {
+          x: { ticks: { color: textColor, maxRotation: 45 }, grid: { display: false } },
+          y: { ticks: { color: textColor }, grid: { color: gridColor }, beginAtZero: true }
+        },
+        plugins: {
+          title: {
+            display: true,
+            text: 'Тепловая карта активности (7 дней)',
+            color: textColor,
+          }
+        }
+      }
+    });
+  } catch (err) {
+    console.error('Heatmap error:', err);
   }
 }
 
@@ -1437,6 +1555,213 @@ $('q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 refreshAll().catch(err => toast(err.message, 'error'));
 </script>
 </body></html>"""
+
+
+from ..core.exporter import (
+    export_all_json, export_all_csv, export_document_json, export_category_json, get_export_stats,
+)
+from ..core.importer import (
+    import_from_json, import_from_csv, import_from_file, validate_import_data,
+)
+from ..core.snapshot import (
+    create_snapshot, list_snapshots, restore_snapshot, delete_snapshot, cleanup_old_snapshots, get_snapshot_stats,
+)
+
+from ..core.exporter import (
+    export_all_json, export_all_csv, export_document_json, export_category_json, get_export_stats,
+)
+from ..core.importer import (
+    import_from_json, import_from_csv, import_from_file, validate_import_data,
+)
+from ..core.snapshot import (
+    create_snapshot, list_snapshots, restore_snapshot, delete_snapshot, cleanup_old_snapshots, get_snapshot_stats,
+)
+
+# ============= EXPORT / IMPORT / SNAPSHOTS =============
+
+@app.get("/api/export")
+async def export_data(
+    format: str = Query("json"),
+    include_embeddings: bool = Query(True),
+):
+    """Export all data as JSON or CSV."""
+    if format.lower() == "csv":
+        content = export_all_csv()
+        return PlainTextResponse(
+            content=content,
+            media_type="text/csv",
+            headers={"Content-Disposition": "attachment; filename=active_memory_export.csv"},
+        )
+    else:
+        data = export_all_json(include_embeddings=include_embeddings)
+        return JSONResponse(content=data)
+
+
+@app.get("/api/export/documents/{document_id}")
+async def export_document(document_id: int, include_embeddings: bool = Query(True)):
+    """Export a single document with all chunks."""
+    data = export_document_json(document_id, include_embeddings=include_embeddings)
+    if data is None:
+        raise HTTPException(status_code=404, detail="Document not found")
+    return data
+
+
+@app.get("/api/export/categories/{category}")
+async def export_category(category: str, include_embeddings: bool = Query(True)):
+    """Export all documents in a category."""
+    data = export_category_json(category, include_embeddings=include_embeddings)
+    return data
+
+
+@app.post("/api/import")
+async def import_data(
+    file: UploadFile = File(...),
+    mode: str = Form("merge"),
+    request: Request = None,
+):
+    """Import data from JSON or CSV file."""
+    token_label = _get_token_label_from_request(request) if request else None
+    ip = _extract_client_ip(request) if request else "unknown"
+    
+    content = await file.read()
+    try:
+        if file.filename.endswith('.json'):
+            data = json.loads(content)
+            result = import_from_json(data, mode=mode)
+        elif file.filename.endswith('.csv'):
+            with tempfile.NamedTemporaryFile(mode='wb', suffix='.csv', delete=False) as tmp:
+                tmp.write(content)
+                tmp_path = tmp.name
+            result = import_from_csv(tmp_path, mode=mode)
+            os.unlink(tmp_path)
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file format. Use .json or .csv")
+        
+        _log_access("import_data", token_label=token_label, ip=ip, details={"mode": mode, "filename": file.filename})
+        return result
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=400, detail="Invalid JSON format")
+    except Exception as e:
+        _log_access("import_data", token_label=token_label, ip=ip, success=False, details={"error": str(e)})
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/import/validate")
+async def validate_import(file: UploadFile = File(...)):
+    """Validate import file without actually importing."""
+    content = await file.read()
+    try:
+        if file.filename.endswith('.json'):
+            data = json.loads(content)
+            return validate_import_data(data)
+        elif file.filename.endswith('.csv'):
+            return {"valid": True, "message": "CSV validation not required (simple format)",
+                    "errors": [], "warnings": []}
+        else:
+            return {"valid": False, "errors": ["Unsupported format"], "warnings": []}
+    except json.JSONDecodeError as e:
+        return {"valid": False, "errors": [f"JSON decode error: {e}"], "warnings": []}
+
+
+@app.post("/api/snapshots")
+async def create_snapshot_endpoint(request: Request, name: str = Query(None)):
+    """Create a new database snapshot."""
+    token_label = _get_token_label_from_request(request)
+    ip = _extract_client_ip(request)
+    
+    result = create_snapshot(name)
+    if result.get("success"):
+        _log_access("create_snapshot", token_label=token_label, ip=ip, details={"name": result.get("name")})
+    else:
+        _log_access("create_snapshot", token_label=token_label, ip=ip, success=False, details=result)
+    return result
+
+
+@app.get("/api/snapshots")
+async def list_snapshots_endpoint():
+    """List all available snapshots."""
+    return {"items": list_snapshots(), "count": len(list_snapshots())}
+
+
+@app.post("/api/snapshots/{snapshot_name}/restore")
+async def restore_snapshot_endpoint(snapshot_name: str, request: Request):
+    """Restore database from a snapshot."""
+    token_label = _get_token_label_from_request(request)
+    ip = _extract_client_ip(request)
+    
+    result = restore_snapshot(snapshot_name)
+    _log_access("restore_snapshot", token_label=token_label, ip=ip, details={"name": snapshot_name, "success": result.get("success")})
+    return result
+
+
+@app.delete("/api/snapshots/{snapshot_name}")
+async def delete_snapshot_endpoint(snapshot_name: str, request: Request):
+    """Delete a specific snapshot."""
+    token_label = _get_token_label_from_request(request)
+    ip = _extract_client_ip(request)
+    
+    result = delete_snapshot(snapshot_name)
+    _log_access("delete_snapshot", token_label=token_label, ip=ip, details={"name": snapshot_name, "success": result.get("success")})
+    return result
+
+
+@app.get("/api/export/stats")
+async def export_stats():
+    """Get statistics about exportable data."""
+    return get_export_stats()
+
+
+@app.get("/api/snapshots/stats")
+async def snapshot_stats():
+    """Get snapshot statistics."""
+    return get_snapshot_stats()
+
+
+# ========== Visualization & Analytics Endpoints ==========
+
+@app.get("/api/visualization/vector-space")
+async def vector_space_endpoint(
+    method: str = "tsne",
+    perplexity: int = Query(30),
+    n_neighbors: int = Query(15),
+):
+    """Get vector space visualization data (t-SNE/UMAP/PCA)."""
+    from ..visualization import get_vector_space_data
+    
+    kwargs = {}
+    if method == "tsne":
+        kwargs["perplexity"] = perplexity
+    elif method == "umap":
+        kwargs["n_neighbors"] = n_neighbors
+    
+    return get_vector_space_data(method=method, **kwargs)
+
+
+@app.get("/api/analytics/heatmap")
+async def heatmap_endpoint(
+    days: int = Query(30),
+    resolution: str = Query("daily"),
+):
+    """Get heatmap data for document access patterns."""
+    from ..core.usage_stats import get_heatmap_data
+    return get_heatmap_data(days=days, resolution=resolution)
+
+
+@app.get("/api/analytics/hot-documents")
+async def hot_documents_endpoint(
+    limit: int = Query(10),
+    days: int = Query(7),
+):
+    """Get most frequently accessed documents."""
+    from ..core.usage_stats import get_hot_documents
+    return {"items": get_hot_documents(limit=limit, days=days)}
+
+
+@app.get("/api/analytics/usage-stats")
+async def usage_stats_endpoint(days: int = Query(30)):
+    """Get comprehensive usage statistics."""
+    from ..core.usage_stats import get_usage_stats
+    return get_usage_stats(days=days)
 
 
 if __name__ == "__main__":
