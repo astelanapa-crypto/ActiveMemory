@@ -466,7 +466,7 @@ async function loadStats() {
         document.getElementById('statEmbeddings').textContent = d.embeddings;
         document.getElementById('statSize').textContent = d.size_human;
         
-        const rec = await api('/memories?limit=10');
+        const rec = await api('/documents?limit=10');
         const list = document.getElementById('recentList');
         if (!rec.items?.length) {
             list.innerHTML = '<div class="empty"><p>No documents stored yet</p></div>';
@@ -475,10 +475,10 @@ async function loadStats() {
         list.innerHTML = rec.items.map(i => `
             <div style="padding:0.75rem;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center">
                 <div>
-                    <span class="tag tag-${i.type}">${i.type}</span>
-                    <span style="margin-left:0.5rem;color:var(--accent)">${i.category}</span>
+                    <span class="tag tag-${i.filetype}">${i.filetype}</span>
+                    <span style="margin-left:0.5rem;color:var(--accent)">${i.category || 'general'}</span>
                 </div>
-                <div style="font-size:0.85rem;color:var(--muted)">${i.content.substring(0,60)}...</div>
+                <div style="font-size:0.85rem;color:var(--muted)">${(i.preview || i.filename || '').substring(0,60)}...</div>
             </div>
         `).join('');
     } catch(e) {
@@ -490,13 +490,13 @@ async function loadStats() {
 async function doSearch() {
     const q = document.getElementById('searchQuery').value.trim();
     const cat = document.getElementById('searchCat').value;
-    const type = document.getElementById('searchType').value;
+    const filetype = document.getElementById('searchType').value;
     const k = document.getElementById('searchK').value;
     if (!q) return showToast('Enter a search query', 'error');
     
     let url = `/search?q=${encodeURIComponent(q)}&k=${k}`;
     if (cat) url += `&category=${cat}`;
-    if (type) url += `&type=${type}`;
+    if (filetype) url += `&filetype=${filetype}`;
     
     const results = document.getElementById('searchResults');
     results.innerHTML = '<div class="empty"><span class="spinner"></span><p>Searching...</p></div>';
@@ -509,11 +509,11 @@ async function doSearch() {
         }
         results.innerHTML = d.results.map(r => `
             <div class="result-card">
-                <span class="result-score">${Math.round(r.similarity * 100)}% match</span>
-                <div class="result-content">${r.content}</div>
+                <span class="result-score">${Math.round((r.score || 0) * 100)}% match</span>
+                <div class="result-content">${r.content || r.preview || ''}</div>
                 <div class="result-meta">
-                    <span class="tag tag-${r.type}">${r.type}</span>
-                    <span style="margin-left:0.5rem">${r.category}</span>
+                    <span class="tag tag-${r.filetype || 'text'}">${r.filetype || 'text'}</span>
+                    <span style="margin-left:0.5rem">${r.category || 'general'}</span>
                 </div>
             </div>
         `).join('');
@@ -529,12 +529,12 @@ async function handleStore(e) {
     data.append('content', document.getElementById('ingestContent').value);
     data.append('category', document.getElementById('ingestCat').value);
     data.append('importance', document.getElementById('ingestImp').value);
-    data.append('type', document.getElementById('ingestType').value);
+    data.append('title', `Manual ${document.getElementById('ingestType').value} memory`);
     data.append('tags', document.getElementById('ingestTags').value);
     
     try {
-        const r = await api('/store', {method: 'POST', body: data});
-        showToast('Stored ' + r.count + ' chunk(s)!');
+        const r = await api('/memory', {method: 'POST', body: data});
+        showToast('Stored document #' + r.id);
         document.getElementById('ingestContent').value = '';
         document.getElementById('ingestTags').value = '';
         loadStats();
@@ -547,16 +547,16 @@ async function handleStore(e) {
 async function loadFiles() {
     const tbody = document.getElementById('filesTableBody');
     try {
-        const d = await api('/memories?limit=100');
+        const d = await api('/documents?limit=100');
         if (!d.items?.length) {
             tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:var(--muted)">No files stored</td></tr>';
             return;
         }
         tbody.innerHTML = d.items.map(i => `
             <tr>
-                <td>${i.content.substring(0,80)}...</td>
-                <td><span class="tag tag-${i.type}">${i.type}</span></td>
-                <td>${i.category}</td>
+                <td>${(i.preview || i.filename || '').substring(0,80)}...</td>
+                <td><span class="tag tag-${i.filetype}">${i.filetype}</span></td>
+                <td>${i.category || 'general'}</td>
                 <td>${i.importance}</td>
                 <td style="color:var(--muted)">${new Date(i.created_at).toLocaleDateString()}</td>
                 <td>
@@ -574,9 +574,9 @@ function filterFiles() {
 }
 
 async function deleteFile(id) {
-    if (!confirm('Delete this memory?')) return;
+    if (!confirm('Delete this document?')) return;
     try {
-        await api('/delete?id=' + id, {method: 'DELETE'});
+        await api('/documents/' + id, {method: 'DELETE'});
         showToast('Deleted');
         loadFiles();
         loadStats();
