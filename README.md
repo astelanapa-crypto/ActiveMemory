@@ -26,6 +26,20 @@ High-performance knowledge management with PostgreSQL/pgvector, chunking, hybrid
 
 ### 5. Run Dashboard
 
+```bash
+web-dashboard
+# or
+python3 -m active_memory_mcp.web.server
+```
+
+### Web templates (canonical path)
+
+Dashboard HTML templates are loaded only from:
+
+`src/active_memory_mcp/web/templates/`
+
+The legacy top-level `web/templates/` directory is no longer used by the FastAPI server.
+
 
 ## MCP Tools
 - search_memory(query, top_k)

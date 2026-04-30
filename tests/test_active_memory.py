@@ -375,6 +375,22 @@ class TestWebServer:
             # If Flask/Starlette not installed, that's OK for unit tests
             pass
 
+    def test_web_pages_smoke(self):
+        """Core dashboard pages render without template path drift."""
+        import os
+        os.environ["AM_WEB_SQLITE"] = "true"
+
+        try:
+            from fastapi.testclient import TestClient
+            from active_memory_mcp.web.server import app
+        except ImportError:
+            return
+
+        client = TestClient(app)
+        for path in ["/dashboard", "/search", "/ingest", "/documents"]:
+            response = client.get(path)
+            assert response.status_code == 200, f"{path} should return 200"
+
 
 class TestMemoryDB:
     """Test memory database integration."""

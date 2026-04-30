@@ -4,12 +4,14 @@ import json
 import logging
 from contextlib import asynccontextmanager
 from datetime import datetime
+from pathlib import Path
 
 import os
 import tempfile
 
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -142,6 +144,7 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="ActiveMemory Control Center", lifespan=lifespan)
+templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -269,9 +272,49 @@ def _store_text_memory(
         session.close()
 
 
+def _get_dashboard_context(session) -> dict:
+    return {
+        "documents": session.query(func.count(Document.id)).scalar() or 0,
+        "chunks": session.query(func.count(Chunk.id)).scalar() or 0,
+        "embeddings": session.query(func.count(Embedding.id)).scalar() or 0,
+        "total_tokens": session.query(func.coalesce(func.sum(Chunk.tokens), 0)).scalar() or 0,
+    }
+
+
 @app.get("/", response_class=HTMLResponse)
-async def root():
-    return HTMLResponse(DASHBOARD_HTML)
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard_page(request: Request):
+    session = get_session()
+    try:
+        stats = _get_dashboard_context(session)
+        recent_docs = session.query(Document).order_by(desc(Document.created_at)).limit(10).all()
+    finally:
+        session.close()
+    return templates.TemplateResponse(
+        "dashboard.html",
+        {"request": request, "stats": stats, "recent_docs": recent_docs},
+    )
+
+
+@app.get("/search", response_class=HTMLResponse)
+async def search_page(request: Request, q: str = ""):
+    results = searcher.search(q, top_k=10) if q else []
+    return templates.TemplateResponse("search.html", {"request": request, "query": q, "results": results})
+
+
+@app.get("/ingest", response_class=HTMLResponse)
+async def ingest_page(request: Request):
+    return templates.TemplateResponse("ingest.html", {"request": request})
+
+
+@app.get("/documents", response_class=HTMLResponse)
+async def documents_page(request: Request):
+    session = get_session()
+    try:
+        docs = session.query(Document).order_by(desc(Document.created_at)).limit(200).all()
+    finally:
+        session.close()
+    return templates.TemplateResponse("documents.html", {"request": request, "documents": docs})
 
 
 @app.get("/health")
