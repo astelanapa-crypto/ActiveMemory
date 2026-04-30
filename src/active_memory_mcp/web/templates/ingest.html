@@ -1,1 +1,30 @@
-{ extends base.html } block title ActiveMemory-Ingest endblock block content h1 Upload Document /h1 /block
+{% extends "base.html" %}
+{% block title %}ActiveMemory - Ingest{% endblock %}
+{% block content %}
+<div class="max-w-3xl mx-auto">
+    <header class="mb-8">
+        <h1 class="text-3xl font-bold text-white mb-2">Upload Document</h1>
+        <p class="text-gray-400">Add files to memory for chunking and search indexing.</p>
+    </header>
+
+    <div class="card p-6">
+        <form action="/api/upload" method="POST" enctype="multipart/form-data" class="space-y-4">
+            <div>
+                <label class="block text-sm text-gray-300 mb-2">File</label>
+                <input type="file" name="file" required class="search-box w-full" />
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                    <label class="block text-sm text-gray-300 mb-2">Category</label>
+                    <input type="text" name="category" value="general" class="search-box w-full mono text-sm" />
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-300 mb-2">Importance (1-10)</label>
+                    <input type="number" min="1" max="10" name="importance" value="5" class="search-box w-full mono text-sm" />
+                </div>
+            </div>
+            <button type="submit" class="btn px-6">Upload</button>
+        </form>
+    </div>
+</div>
+{% endblock %}
