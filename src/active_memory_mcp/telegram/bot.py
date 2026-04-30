@@ -4,6 +4,8 @@ Provides commands: /search, /context, /list, /add, /stats.
 """
 
 import logging
+import os
+import tempfile
 
 from telegram import Update
 from telegram.ext import (
@@ -226,15 +228,28 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     await update.message.reply_text("📥 Загружаю файл...")
     
+    temp_path = None
+    file_name = update.message.document.file_name or ""
+    user_id = update.effective_user.id if update.effective_user else None
+    file_extension = os.path.splitext(file_name)[1]
+
     try:
         file = await update.message.document.get_file()
-        file_path = f"/tmp/telegram_{update.message.document.file_name}"
-        await file.download_to_drive(file_path)
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_extension) as temp_file:
+            temp_path = temp_file.name
+
+        logger.info(
+            "Telegram file upload: user_id=%s file_name=%s temp_path=%s",
+            user_id,
+            file_name,
+            temp_path,
+        )
+        await file.download_to_drive(temp_path)
         
         # Process file
         from ..ingest.processor import DocumentProcessor
         processor = DocumentProcessor()
-        result = processor.ingest_document(file_path)
+        result = processor.ingest_document(temp_path)
         
         if result["success"]:
             await update.message.reply_text(
@@ -245,14 +260,12 @@ async def handle_file(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text(f"❌ Ошибка: {result.get('message', 'Unknown')}")
         
-        # Cleanup
-        import os
-        if os.path.exists(file_path):
-            os.remove(file_path)
-    
     except Exception as e:
         logger.error(f"Add file error: {e}")
         await update.message.reply_text(f"❌ Ошибка: {e}")
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            os.remove(temp_path)
     
     return ConversationHandler.END
 
