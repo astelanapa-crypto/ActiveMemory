@@ -11,7 +11,11 @@ import tempfile
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 from sqlalchemy import desc, func, or_
+
+from prometheus_client import Counter, Gauge, Histogram, generate_latest, CONTENT_TYPE_LATEST
 
 from ..core.config import config
 from ..core.auth import (
@@ -43,6 +47,17 @@ embedder = Embedder()
 searcher = HybridSearcher()
 
 logger = logging.getLogger(__name__)
+
+# Rate limiter
+limiter = Limiter(key_func=get_remote_address)
+
+# Prometheus metrics
+REQUEST_COUNT = Counter('activememory_requests_total', 'Total requests', ['method', 'endpoint', 'status'])
+DOCUMENT_COUNT = Gauge('activememory_documents_total', 'Total number of documents')
+CHUNK_COUNT = Gauge('activememory_chunks_total', 'Total number of chunks')
+EMBEDDING_COUNT = Gauge('activememory_embeddings_total', 'Total number of embeddings')
+SEARCH_LATENCY = Histogram('activememory_search_duration_seconds', 'Search latency')
+IMPORT_COUNT = Counter('activememory_imports_total', 'Total imports', ['status'])
 
 _ENCRYPTION_KEY = None
 
@@ -269,6 +284,19 @@ async def health():
         session.close()
 
 
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    session = get_session()
+    try:
+        DOCUMENT_COUNT.set(session.query(func.count(Document.id)).scalar() or 0)
+        CHUNK_COUNT.set(session.query(func.count(Chunk.id)).scalar() or 0)
+        EMBEDDING_COUNT.set(session.query(func.count(Embedding.chunk_id)).scalar() or 0)
+    finally:
+        session.close()
+    return PlainTextResponse(generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
+
 @app.get("/api/stats")
 async def stats(request: Request):
     _log_access("stats_read", token_label=_get_token_label_from_request(request), ip=_extract_client_ip(request))
@@ -359,6 +387,7 @@ async def context(limit: int = Query(12, ge=1, le=50)):
 
 
 @app.post("/api/memory")
+@limiter.limit("30/minute")  # Rate limit: 30 requests per minute
 async def store_memory(
     request: Request,
     content: str = Form(...),
@@ -381,6 +410,7 @@ async def store_memory(
 
 
 @app.post("/api/upload")
+@limiter.limit("10/minute")  # Rate limit: 10 uploads per minute
 async def upload_document(
     request: Request,
     file: UploadFile = File(...),
@@ -437,6 +467,7 @@ async def search(
 
 
 @app.patch("/api/documents/{document_id}")
+@limiter.limit("60/minute")
 async def update_document(
     request: Request,
     document_id: int,
@@ -465,6 +496,7 @@ async def update_document(
 
 
 @app.delete("/api/documents/{document_id}")
+@limiter.limit("30/minute")
 async def delete_document(request: Request, document_id: int):
     token_label = _get_token_label_from_request(request)
     session = get_session()
@@ -620,6 +652,7 @@ async def list_tokens(request: Request):
 
 
 @app.post("/api/tokens")
+@limiter.limit("5/minute")  # Token creation is sensitive
 async def create_token(request: Request):
     ip = _extract_client_ip(request)
     _log_access("token_create", ip=ip, details={"ip": ip})
@@ -736,6 +769,7 @@ async def get_access_log(
 
 
 @app.delete("/api/access-log")
+@limiter.limit("10/minute")
 async def clear_access_log(request: Request):
     _log_access("log_clear", token_label=_get_token_label_from_request(request), ip=_extract_client_ip(request))
     older_than_days = int(request.query_params.get("older_than_days", 0))
@@ -754,6 +788,7 @@ async def clear_access_log(request: Request):
 
 
 @app.post("/api/documents/{document_id}/encrypt")
+@limiter.limit("20/minute")
 async def encrypt_document(document_id: int, request: Request):
     _log_access("document_encrypt", token_label=_get_token_label_from_request(request), document_id=document_id, ip=_extract_client_ip(request))
     session = get_session()
@@ -1599,6 +1634,7 @@ async def export_category(category: str, include_embeddings: bool = Query(True))
 
 
 @app.post("/api/import")
+@limiter.limit("5/minute")  # Import is resource-intensive
 async def import_data(
     file: UploadFile = File(...),
     mode: str = Form("merge"),

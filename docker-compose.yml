@@ -1,0 +1,92 @@
+version: '3.8'
+
+services:
+  postgresql:
+    image: postgres:16-alpine
+    container_name: activememory-postgres
+    environment:
+      POSTGRES_DB: hermes_memory
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${AM_DB_PASSWORD:-postgres}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: activememory-redis
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  app:
+    build: .
+    container_name: activememory-app
+    environment:
+      AM_DB_HOST: postgresql
+      AM_DB_PORT: 5432
+      AM_DB_NAME: hermes_memory
+      AM_DB_USER: postgres
+      AM_DB_PASSWORD: ${AM_DB_PASSWORD:-postgres}
+      AM_REDIS_URL: redis://redis:6379/0
+      AM_WEB_PORT: 8788
+      AM_USE_REDIS: "true"
+      AM_REQUIRE_AUTH: ${AM_REQUIRE_AUTH:-false}
+      AM_ENCRYPTION_KEY: ${AM_ENCRYPTION_KEY:-active_memory_default_key_change_me}
+    ports:
+      - "8788:8788"
+    depends_on:
+      postgresql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8788/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Optional: Embedding service (if running BGE-M3 locally via llama.cpp)
+  # embedding:
+  #   image: ghcr.io/ggerganov/llama.cpp:server
+  #   container_name: activememory-embedding
+  #   volumes:
+  #     - ./models:/models
+  #   command: >
+  #     -m /models/bge-m3-q8_0.gguf
+  #     --port 8899
+  #     --embedding
+  #     --pooling none
+  #   ports:
+  #     - "8899:8899"
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+
+volumes:
+  postgres_data:
+  redis_data:

@@ -5,7 +5,7 @@ Tracks document access, search queries, and generates heatmap data.
 
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, UTC
 from typing import Dict, List
 
 from sqlalchemy import func, and_
@@ -86,7 +86,7 @@ def get_heatmap_data(
     try:
         from ..storage.db import AccessLog
         
-        since = datetime.utcnow() - timedelta(days=days)
+        since = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
         
         # Query access logs for document-related actions
         query = session.query(
@@ -140,8 +140,7 @@ def _process_daily_heatmap(results, days: int) -> Dict:
             heatmap_data[date_str][action_type] = row.count
     
     # Fill missing dates with zeros
-    from datetime import datetime, timedelta
-    today = datetime.utcnow().date()
+    today = datetime.now(UTC).replace(tzinfo=None).date()
     for i in range(days):
         date = (today - timedelta(days=i)).isoformat()
         if date not in heatmap_data:
@@ -166,7 +165,7 @@ def _process_hourly_heatmap(results, days: int) -> Dict:
     
     for row in results:
         if row.date and row.hour is not None:
-            day_idx = (datetime.utcnow().date() - row.date).days
+            day_idx = (datetime.now(UTC).replace(tzinfo=None).date() - row.date).days
             if 0 <= day_idx < days:
                 heatmap[day_idx][row.hour] += row.count
     
@@ -192,7 +191,7 @@ def get_hot_documents(limit: int = 10, days: int = 7) -> List[Dict]:
     try:
         from ..storage.db import AccessLog
         
-        since = datetime.utcnow() - timedelta(days=days)
+        since = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
         
         # Extract document IDs from access log details
         results = session.query(
@@ -249,7 +248,7 @@ def get_usage_stats(days: int = 30) -> Dict:
     try:
         from ..storage.db import AccessLog
         
-        since = datetime.utcnow() - timedelta(days=days)
+        since = datetime.now(UTC).replace(tzinfo=None) - timedelta(days=days)
         
         # Total accesses
         total = session.query(func.count()).filter(

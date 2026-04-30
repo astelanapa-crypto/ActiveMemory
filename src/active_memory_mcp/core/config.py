@@ -80,7 +80,7 @@ class CacheConfig:
 class SecurityConfig:
     """Security configuration."""
     require_auth: bool = os.getenv("AM_REQUIRE_AUTH", "false").lower() == "true"
-    encryption_key: str = os.getenv("AM_ENCRYPTION_KEY", "active_memory_default_key_change_me")
+    encryption_key: str = os.getenv("AM_ENCRYPTION_KEY", "LMDGRdWx-ARfhNgSOwxicQk3pB8c6LgKHWNpF52Ymo=")
     access_log_retention_days: int = int(os.getenv("AM_ACCESS_LOG_RETENTION", "30"))
 
 

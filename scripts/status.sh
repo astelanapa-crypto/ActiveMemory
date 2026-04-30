@@ -2,6 +2,8 @@
 # Check status of ActiveMemory services.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+LOGS_DIR="$PROJECT_DIR/logs"
 
 echo "📊 Status of ActiveMemory services"
 echo "======================================"
@@ -36,22 +38,22 @@ check_service() {
 }
 
 # MCP Server (stdio-based, runs as subprocess when MCP client connects)
-if [ -f /tmp/active_memory_mcp.pid ] && kill -0 $(cat /tmp/active_memory_mcp.pid) 2>/dev/null; then
-    echo -e "🟢 MCP Server: \033[0;32mRUNNING\033[0m (PID: $(cat /tmp/active_memory_mcp.pid)) - stdio mode"
+if [ -f "$LOGS_DIR/active_memory_mcp.pid" ] && kill -0 $(cat "$LOGS_DIR/active_memory_mcp.pid") 2>/dev/null; then
+    echo -e "🟢 MCP Server: \033[0;32mRUNNING\033[0m (PID: $(cat "$LOGS_DIR/active_memory_mcp.pid")) - stdio mode"
 else
     echo -e "⚪ MCP Server: \033[0;33mSTDIO MODE\033[0m (not a daemon - use with MCP client like Hermes)"
 fi
 echo ""
-check_service "Web Dashboard" /tmp/active_memory_web.pid "8788" "http://localhost:8788"
-check_service "Telegram Bot" /tmp/active_memory_telegram.pid
+check_service "Web Dashboard" "$LOGS_DIR/active_memory_web.pid" "8788" "http://localhost:8788"
+check_service "Telegram Bot" "$LOGS_DIR/active_memory_telegram.pid"
 
 # Overall status
 RUNNING=0
 TOTAL=3
 
-[ -f /tmp/active_memory_mcp.pid ] && kill -0 $(cat /tmp/active_memory_mcp.pid) 2>/dev/null && RUNNING=$((RUNNING + 1))
-[ -f /tmp/active_memory_web.pid ] && kill -0 $(cat /tmp/active_memory_web.pid) 2>/dev/null && RUNNING=$((RUNNING + 1))
-[ -f /tmp/active_memory_telegram.pid ] && kill -0 $(cat /tmp/active_memory_telegram.pid) 2>/dev/null && RUNNING=$((RUNNING + 1))
+[ -f "$LOGS_DIR/active_memory_mcp.pid" ] && kill -0 $(cat "$LOGS_DIR/active_memory_mcp.pid") 2>/dev/null && RUNNING=$((RUNNING + 1))
+[ -f "$LOGS_DIR/active_memory_web.pid" ] && kill -0 $(cat "$LOGS_DIR/active_memory_web.pid") 2>/dev/null && RUNNING=$((RUNNING + 1))
+[ -f "$LOGS_DIR/active_memory_telegram.pid" ] && kill -0 $(cat "$LOGS_DIR/active_memory_telegram.pid") 2>/dev/null && RUNNING=$((RUNNING + 1))
 
 echo "======================================"
 echo "Summary: $RUNNING/$TOTAL services running"
