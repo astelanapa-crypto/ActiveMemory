@@ -456,7 +456,6 @@ class TestPhase2Searcher:
     def test_apply_filters_date_from(self):
         """_apply_filters handles date_from filter."""
         from active_memory_mcp.search.searcher import HybridSearcher
-        from active_memory_mcp.storage.db import Document
         searcher = HybridSearcher()
         # Create a mock query object
         class MockQuery:
@@ -510,7 +509,7 @@ class TestPhase3SmartContext:
 
     def test_get_context_returns_list(self):
         """get_context returns a list of SearchResult."""
-        from active_memory_mcp.search.searcher import HybridSearcher, SearchResult
+        from active_memory_mcp.search.searcher import HybridSearcher
         searcher = HybridSearcher()
         results = searcher.get_context(max_tokens=1000)
         assert isinstance(results, list)

@@ -7,7 +7,6 @@ Supposts PostgreSQL (pg_dump) and SQLite (file copy + gzip).
 import gzip
 import os
 import subprocess
-import tempfile
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import List, Dict, Optional

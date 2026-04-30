@@ -32,7 +32,6 @@ class TestExporter:
     def test_export_all_json_structure(self):
         """Test JSON export returns correct structure."""
         from active_memory_mcp.core.exporter import export_all_json
-        from active_memory_mcp.storage.db import Document
         
         # Create mock doc
         doc = mock.MagicMock()
@@ -66,7 +65,6 @@ class TestExporter:
     def test_export_all_json_content(self):
         """Test JSON export contains correct data."""
         from active_memory_mcp.core.exporter import export_all_json
-        from active_memory_mcp.storage.db import Document
         
         # Create mock doc with chunk
         chunk = mock.MagicMock()
@@ -112,7 +110,6 @@ class TestExporter:
     def test_export_all_csv_structure(self):
         """Test CSV export returns correct structure."""
         from active_memory_mcp.core.exporter import export_all_csv
-        from active_memory_mcp.storage.db import Document
         
         # Create mock doc
         doc = mock.MagicMock()
@@ -144,7 +141,6 @@ class TestExporter:
     def test_export_all_csv_content(self):
         """Test CSV export contains correct data."""
         from active_memory_mcp.core.exporter import export_all_csv
-        from active_memory_mcp.storage.db import Document
         
         # Create mock doc with chunk
         chunk = mock.MagicMock()

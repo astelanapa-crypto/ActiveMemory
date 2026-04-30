@@ -1,5 +1,4 @@
 import logging
-import httpx
 from typing import List, Dict, Any
 from ..core.config import config
 from .embedder import Embedder
@@ -394,7 +393,7 @@ class HybridSearcher:
         important static context.
         """
         max_tokens = max_tokens or config.search.context_max_tokens
-        from ..storage.db import get_session, Document, Chunk
+        from ..storage.db import get_session, Document
         session = get_session()
         try:
             important_chunks = []

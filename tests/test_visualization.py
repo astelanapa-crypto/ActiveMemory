@@ -9,7 +9,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import numpy as np
 from unittest import mock
-from datetime import datetime, timedelta
 
 import pytest
 

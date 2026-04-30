@@ -68,7 +68,6 @@ class Embedder:
 
     def _cache_key(self, text: str) -> str:
         """Generate cache key from text."""
-        import hashlib
         return "emb:" + hashlib.md5(text.encode()).hexdigest()
 
     def _get_cached(self, text: str) -> Optional[Dict]:

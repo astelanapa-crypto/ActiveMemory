@@ -4,12 +4,16 @@ Tracks document access, search queries, and generates heatmap data.
 """
 
 import json
+import logging
 from datetime import datetime, timedelta
-from typing import List, Dict, Optional
+from typing import Dict, List
+
 from sqlalchemy import func, and_
 
-from ..storage.db import get_session, Document, Chunk, Embedding
+from ..storage.db import get_session, Document
 from ..core.config import config
+
+logger = logging.getLogger(__name__)
 
 
 class DocumentAccessLog:
@@ -210,7 +214,8 @@ def get_hot_documents(limit: int = 10, days: int = 7) -> List[Dict]:
                 doc_id = details.get("document_id")
                 if doc_id:
                     doc_counts[doc_id] = row.access_count
-            except:
+            except Exception as e:
+                logger.warning(f"Access log processing error: {e}")
                 continue
         
         # Fetch document details

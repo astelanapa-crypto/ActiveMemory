@@ -4,7 +4,7 @@ Provides dimensionality reduction (t-SNE, UMAP) for vector space visualization.
 """
 
 import numpy as np
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 from ..storage.db import get_session, Document, Chunk, Embedding
 from ..core.config import config
 

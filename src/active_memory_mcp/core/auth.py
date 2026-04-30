@@ -6,7 +6,6 @@ API tokens with scope-based access control (read/write/admin).
 import hashlib
 import secrets
 import logging
-from datetime import datetime, timezone, timedelta
 from typing import Optional
 
 from cryptography.fernet import Fernet

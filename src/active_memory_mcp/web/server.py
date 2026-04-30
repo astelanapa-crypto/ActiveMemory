@@ -1,20 +1,21 @@
 """Web dashboard for managing agent memory and context."""
 
+import json
+import logging
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
+
 import os
 import tempfile
-import time
-from functools import wraps
 
-from fastapi import Depends, FastAPI, File, Form, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from sqlalchemy import desc, func, or_
 
 from ..core.config import config
 from ..core.auth import (
-    generate_token, hash_token, validate_scopes,
+    generate_token, hash_token,
     create_encryption_salt, encrypt_embedding, decrypt_embedding, get_encryption_key,
     VALID_SCOPES,
 )
@@ -26,14 +27,21 @@ from ..storage.db import (
     AccessLog, ApiToken, Chunk, Document, Embedding, Vector,
     get_backend, get_session, init_db,
 )
-
+from ..core.exporter import (
+    export_all_json, export_all_csv, export_document_json, export_category_json, get_export_stats,
+)
+from ..core.importer import (
+    import_from_json, import_from_csv, validate_import_data,
+)
+from ..core.snapshot import (
+    create_snapshot, list_snapshots, restore_snapshot, delete_snapshot, get_snapshot_stats,
+)
 
 processor = DocumentProcessor()
 chunker = Chunker()
 embedder = Embedder()
 searcher = HybridSearcher()
 
-import logging
 logger = logging.getLogger(__name__)
 
 _ENCRYPTION_KEY = None
@@ -136,7 +144,6 @@ _AUTH_REQUIRED_PATHS = {"/api/memory", "/api/upload", "/api/tokens", "/api/acces
 async def auth_and_logging_middleware(request: Request, call_next):
     ip = _extract_client_ip(request)
     action_name = f"{request.method.lower()}_{request.url.path.strip('/').replace('/', '_')}"
-    token_label = None
 
     if config.security.require_auth and request.method in _WRITE_ACTIONS:
         needs_auth = any(request.url.path.startswith(p) for p in _AUTH_REQUIRED_PATHS)
@@ -159,7 +166,6 @@ async def auth_and_logging_middleware(request: Request, call_next):
                 if token.expires_at and token.expires_at < _dt.utcnow():
                     _log_access("auth_expired", token_label=token.label, ip=ip, success=False)
                     return JSONResponse(status_code=401, content={"error": "Token expired"})
-                token_label = token.label
                 token.last_used_at = datetime.utcnow()
                 session.commit()
             finally:
@@ -712,16 +718,16 @@ async def get_access_log(
         return {
             "items": [
                 {
-                    "id": l.id,
-                    "timestamp": l.timestamp.isoformat() if l.timestamp else None,
-                    "action": l.action,
-                    "token_label": l.token_label,
-                    "document_id": l.document_id,
-                    "ip_address": l.ip_address,
-                    "success": l.success,
-                    "details": l.details or {},
+                    "id": log_entry.id,
+                    "timestamp": log_entry.timestamp.isoformat() if log_entry.timestamp else None,
+                    "action": log_entry.action,
+                    "token_label": log_entry.token_label,
+                    "document_id": log_entry.document_id,
+                    "ip_address": log_entry.ip_address,
+                    "success": log_entry.success,
+                    "details": log_entry.details or {},
                 }
-                for l in logs
+                for log_entry in logs
             ],
             "count": len(logs),
         }
@@ -1511,11 +1517,11 @@ async function loadAccessLog() {
   const items = d.items || [];
   $('logTable').innerHTML = items.length ? items.map(l => `
     <tr>
-      <td>${esc(l.timestamp?.slice(0,19) || '—')}</td>
-      <td><code>${esc(l.action)}</code></td>
-      <td>${esc(l.token_label || '—')}</td>
-      <td>${esc(l.ip_address || '—')}</td>
-      <td>${l.success ? '<span class="chip" style="color:var(--ok)">✓</span>' : '<span class="chip" style="color:var(--danger)">✗</span>'}</td>
+      <td>${esc(log_entry.timestamp?.slice(0,19) || '—')}</td>
+      <td><code>${esc(log_entry.action)}</code></td>
+      <td>${esc(log_entry.token_label || '—')}</td>
+      <td>${esc(log_entry.ip_address || '—')}</td>
+      <td>${log_entry.success ? '<span class="chip" style="color:var(--ok)">✓</span>' : '<span class="chip" style="color:var(--danger)">✗</span>'}</td>
     </tr>
   `).join('') : '<tr><td colspan="5" class="empty">Нет записей</td></tr>';
 }
@@ -1555,27 +1561,6 @@ $('q').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
 refreshAll().catch(err => toast(err.message, 'error'));
 </script>
 </body></html>"""
-
-
-from ..core.exporter import (
-    export_all_json, export_all_csv, export_document_json, export_category_json, get_export_stats,
-)
-from ..core.importer import (
-    import_from_json, import_from_csv, import_from_file, validate_import_data,
-)
-from ..core.snapshot import (
-    create_snapshot, list_snapshots, restore_snapshot, delete_snapshot, cleanup_old_snapshots, get_snapshot_stats,
-)
-
-from ..core.exporter import (
-    export_all_json, export_all_csv, export_document_json, export_category_json, get_export_stats,
-)
-from ..core.importer import (
-    import_from_json, import_from_csv, import_from_file, validate_import_data,
-)
-from ..core.snapshot import (
-    create_snapshot, list_snapshots, restore_snapshot, delete_snapshot, cleanup_old_snapshots, get_snapshot_stats,
-)
 
 # ============= EXPORT / IMPORT / SNAPSHOTS =============
 

@@ -723,17 +723,14 @@ async def handle_call_tool(
                 filters["filetype"] = arguments["filetype"]
 
             from datetime import datetime
-            valid_from = None
-            valid_to = None
             if date_from:
                 try:
-                    valid_from = datetime.fromisoformat(date_from)
+                    datetime.fromisoformat(date_from)
                 except (ValueError, TypeError):
                     date_from = None
             if date_to:
                 try:
                     datetime.fromisoformat(date_to)
-                    valid_to = date_to
                 except (ValueError, TypeError):
                     date_to = None
 

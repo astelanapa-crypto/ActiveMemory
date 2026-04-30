@@ -4,7 +4,6 @@ Export documents, chunks, and embeddings to JSON or CSV format.
 Supports full export, single document export, and category-based export.
 """
 
-import json
 import csv
 import io
 from datetime import datetime, timezone

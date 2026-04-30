@@ -7,11 +7,8 @@ Supports merge (add new) and replace (replace all) modes.
 import hashlib
 import json
 import csv
-import io
-from datetime import datetime, timezone
-from typing import Optional, List, Dict, Any
+from datetime import datetime
 
-from sqlalchemy import func
 
 from ..storage.db import (
     Document, Chunk, Embedding,
@@ -260,12 +257,10 @@ def import_from_csv(file_path: str, mode: str = "merge") -> dict:
 
         with open(file_path, 'r', encoding='utf-8') as f:
             reader = csv.DictReader(f)
-            current_doc_id = None
-            current_doc = None
 
             for row in reader:
                 try:
-                    doc_id = int(row.get("document_id", 0))
+                    int(row.get("document_id", 0))
                     filename = row.get("filename", "imported.txt")
                     filetype = row.get("filetype", "text")
                     title = row.get("title", filename)
@@ -342,7 +337,7 @@ def import_from_file(file_path: str, mode: str = "merge") -> dict:
 def __import_vector__():
     """Check if pgvector Vector type is available."""
     try:
-        from pgvector.sqlalchemy import Vector
-        return True
+        import importlib
+        return importlib.util.find_spec("pgvector") is not None
     except ImportError:
         return False

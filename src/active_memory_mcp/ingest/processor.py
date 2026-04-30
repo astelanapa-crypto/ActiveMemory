@@ -222,7 +222,7 @@ class DocumentProcessor:
             if not doc:
                 return {"success": False, "message": "Document not found"}
 
-            engine = get_engine()
+            get_engine()
             session.execute(delete(Embedding).where(
                 Embedding.chunk_id.in_(
                     session.query(Chunk.id).filter(Chunk.document_id == document_id)

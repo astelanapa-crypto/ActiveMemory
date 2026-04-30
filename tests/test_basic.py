@@ -8,11 +8,13 @@ from active_memory_mcp.core.config import config
 from active_memory_mcp.ingest.chunker import Chunker
 from active_memory_mcp.search.embedder import Embedder
 
+
 def test_config():
     """Test configuration loads."""
     assert config.chunking.chunk_size == 512
     assert config.chunking.chunk_overlap == 50
     print("✓ Config OK")
+
 
 def test_chunker():
     """Test text chunking."""
@@ -23,30 +25,32 @@ def test_chunker():
     assert all(c["document_id"] == 1 for c in chunks)
     print(f"✓ Chunker OK ({len(chunks)} chunks)")
 
+
 def test_embedder():
     """Test embedding generation."""
     embedder = Embedder()
-    vec = embedder.embed("test document")
+    vec = embedder.embed_dense("test document")
     assert vec is not None
     assert len(vec) == config.embedding.dimensions
     print(f"✓ Embedder OK (dim={len(vec)})")
 
+
 def test_cosine_similarity():
-    """Test cosine similarity with N-gram fallback."""
+    """Test cosine similarity with BGE-M3."""
     embedder = Embedder()
-    embedder._local_model = None  # Force fallback
-    vec1 = embedder.embed("hello world")
-    vec2 = embedder.embed("hello world")
-    vec3 = embedder.embed("completely different")
+    vec1 = embedder.embed_dense("hello world")
+    vec2 = embedder.embed_dense("hello world")
+    vec3 = embedder.embed_dense("completely different")
     sim_same = embedder.cosine_similarity(vec1, vec2)
     sim_diff = embedder.cosine_similarity(vec1, vec3)
     assert sim_same > 0.99
     assert sim_same > sim_diff
     # Similar texts should be closer than completely different
-    vec4 = embedder.embed("hello there")
+    vec4 = embedder.embed_dense("hello there")
     sim_similar = embedder.cosine_similarity(vec1, vec4)
     assert sim_similar > sim_diff
     print(f"✓ Cosine similarity OK (same={sim_same:.3f}, similar={sim_similar:.3f}, diff={sim_diff:.3f})")
+
 
 if __name__ == "__main__":
     test_config()

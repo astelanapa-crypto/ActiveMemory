@@ -4,19 +4,15 @@ Provides commands: /search, /context, /list, /add, /stats.
 """
 
 import logging
-import os
-from typing import List, Optional
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
-    Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters, ConversationHandler,
+    Application, CommandHandler, MessageHandler, ContextTypes, filters, ConversationHandler,
 )
 
 from ..core.config import config
 from ..search.searcher import HybridSearcher
 from ..storage.db import get_session, Document
-from ..core.exporter import export_all_json
 
 logger = logging.getLogger(__name__)
 
